@@ -71,7 +71,7 @@ class bot
 			
 			'unparsed_responses'	=> array(
 				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
-				'issues'	=> '{repo}: 6{user} opened an issue at ({date}): {title} - {message} ({url})',
+				'issues'	=> '{repo}: 6{user} opened an issue at ({date}): {title} - {message} ({url}){pull_request}',
 				'pulls'		=> '{repo}: 6{user} has requested to merge 5{head_label} into 7{base_label}: {title} - {message} ({url})',
 				'comments'	=> '{repo}: 6{user} has commented on ({title}): {message} ({url})',
 				// unrequested responses, ie event based
@@ -142,7 +142,7 @@ class bot
 		// connect the bot
 		
 		$this->xbot->timer->add( array( 'bot', 'listen_data', array( $this->xbot ) ), 5, 0 );
-		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 30, 0 );
+		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 10, 0 );
 		// set up some timers, we only actually go hunting for new data every 30 seconds, then if new data is found its stored
 		// the stored data is checked by listen_data every 5 seconds. We only check every 30 seconds because for huge repos like
 		// facebook's hiphop-php, which I developed this on it can be quite intensive, and plus the more often we check the quicker
@@ -417,8 +417,7 @@ class bot
 		{
 			while ( $data = mysql_fetch_array( $get_new_data_q ) )
 			{
-				$dpayload = stripslashes( $data['payload'] );
-				$payload = json_decode( $dpayload, true );
+				$payload = json_decode( $data['payload'], true );
 				
 				if ( $data['type'] == 'commit' )
 					self::parse_commits( $xbot, $repo, $payload );
@@ -466,50 +465,69 @@ class bot
 					// find out how many are actually new, if none are we don't bother inserting into
 					// our post recieve data table or we fast end up with a HUGE table.
 					
-					foreach ( $data[$id] as $i => $rep )
+					$git_reps_q = mysql_query( "SELECT `id`, `repo`, `info_id`, `comments`, `type` FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$git_chans['repo']."' AND `type` = '".$id."'" );
+					$num_rows = mysql_num_rows( $git_reps_q );
+					
+					while ( $rows = mysql_fetch_array( $git_reps_q ) )
+					{
+						foreach ( $data[$id] as $ird => $rd )
+						{
+							if ( $rows['info_id'] == $rd['number'] )
+							{
+								$info_id = $ird;
+								break;
+							}
+							// we've found it!
+						}
+						// find the data row.
+						
+						if ( $rows['comments'] < $data[$id][$info_id]['comments'] )
+						{
+							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$data[$id][$info_id]['comments']."' WHERE `id` = '".$rows['id']."'" );
+							// update our new comment limit
+							
+							$ccall = 'http://github.com/api/v2/json/issues/comments/'.$git_chans['repo'].'/'.$rows['info_id'];
+							$cdata = self::call_api( $ccall );
+							$ncdata['comments'] = array_slice( $cdata['comments'], $rows['comments'] );
+							$ncdata['repo'] = $git_chans['repo'];
+							$ncdata['repo_id'] = $rows['info_id'];
+							$ncdata['issue_title'] = $data[$id][$info_id]['title'];
+							
+							$comments++;
+							// we need to find out which comments are new.
+						}
+						// means we have new comments!
+					}
+					// look for comment changes
+					
+					if ( $git_chans['empty'] == 0 && ( $comments > 0 ) )
+					{
+						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $ncdata ) )."', '0', 'comments')" );
+					}
+					// we have changed records!
+					
+					if ( $num_rows == count( $data[$id] ) )
+						continue;
+					// no changes <3
+					
+					$rdata[$id] = array_slice( $data[$id], $num_rows );
+					// remove all the old crap.
+					
+					foreach ( $rdata[$id] as $i => $rep )
 					{
 						$timestamp = strtotime( $rep['created_at'] );
-						$git_reps_q = mysql_query( "SELECT `id`, `repo`, `info_id`, `comments` FROM `".self::$config['mysql']['table_i']."` WHERE `info_id` = '".$rep['number']."' AND `type` = '".$id."' AND `repo` = '".$git_chans['repo']."' AND `timestamp` = '".$timestamp."'" );
+						$number = $rep['number'];
+						$rdata[$id][$i]['repo'] = $git_chans['repo'];
 						
-						if ( mysql_num_rows( $git_reps_q ) > 0 )
-						{
-							$git_reps = mysql_fetch_array( $git_reps_q );
-							
-							if ( $git_reps['comments'] < $rep['comments'] )
-							{
-								mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$rep['comments']."' WHERE `id` = '".$git_reps['id']."'" );
-								// update our new comment limit
-								
-								$ccall = 'http://github.com/api/v2/json/issues/comments/'.$git_chans['repo'].'/'.$git_reps['info_id'];
-								$cdata = self::call_api( $ccall );
-								$ncdata['comments'] = array_slice( $cdata['comments'], $git_reps['comments'] );
-								$ncdata['repo'] = $git_chans['repo'];
-								$ncdata['repo_id'] = $git_reps['info_id'];
-								$ncdata['issue_title'] = $rep['title'];
-								
-								$comments++;
-								// we need to find out which comments are new.
-							}
-							// update number of comments and look for the new ones :D
-							
-							unset( $data[$id][$i] );
-							continue;
-						}
-						
-						$number = ( $id == 'comments' ) ? $rep['id'] : $rep['number'];
-						$data[$id][$i]['repo'] = $git_chans['repo'];
 						$changed++;
 						mysql_query( "INSERT INTO `".self::$config['mysql']['table_i']."` (`type`, `repo`, `info_id`, `timestamp`, `comments`) VALUES('".$id."', '".$git_chans['repo']."', '".$number."', '".$timestamp."', '".$rep['comments']."')" );
 						// check if the issue is new or not, if it is insert it into our issue table so
 						// we don't recognise it again, and also pass info into our post_recieve table
 					}
 					
-					if ( $git_chans['empty'] == 0 && ( $changed > 0 || $comments > 0 ) )
+					if ( $git_chans['empty'] == 0 && ( $changed > 0 ) )
 					{
-						$encoded_data = ( $comments > 0 ) ? $ncdata : $data;
-						$rid = ( $comments > 0 ) ? 'comments' : $id;
-						$encoded_data = addslashes( json_encode( $encoded_data ) );
-						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".$encoded_data."', '0', '".$rid."')" );
+						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $rdata ) )."', '0', '".$id."')" );
 					}
 					// we have changed records!
 				}
@@ -537,6 +555,7 @@ class bot
 		
 		foreach ( $payload['commits'] as $id => $commit )
 		{
+			$commit['message'] = preg_replace( '/\s\s+/', ' ', $commit['message'] );
 			$msg = self::$config['unparsed_responses']['commits'];
 			$search = array(
 				'{repo}', '{user}', '{branch}', '{revision}', '{files}', '{title}', '{url}'
@@ -583,9 +602,10 @@ class bot
 			$repo = $issue['repo'];
 			$repo_a = explode( '/', $repo );
 			
+			$issue['body'] = preg_replace( '/\s\s+/', ' ', $issue['body'] );
 			$msg = self::$config['unparsed_responses']['issues'];
 			$search = array(
-				'{repo}', '{user}', '{date}', '{title}', '{message}', '{url}'
+				'{repo}', '{user}', '{date}', '{title}', '{message}', '{url}', '{pull_request}'
 			);
 			
 			$replace = array(
@@ -594,7 +614,8 @@ class bot
 				date( 'd/m/Y i:H', strtotime( $issue['created_at'] ) ),
 				( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
 				( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
-				$issue['html_url']
+				$issue['html_url'],
+				( isset( $issue['pull_request_url'] ) ) ? ' (pull request: '.$issue['pull_request_url'].')' : '',
 			);
 			
 			$msg = str_replace( $search, $replace, $msg );
@@ -628,6 +649,7 @@ class bot
 			$repo = $pull['repo'];
 			$repo_a = explode( '/', $repo );
 			
+			$pull['body'] = preg_replace( '/\s\s+/', ' ', $pull['body'] );
 			$msg = self::$config['unparsed_responses']['pulls'];
 			$search = array(
 				'{repo}', '{user}', '{head_label}', '{base_label}', '{title}', '{message}', '{url}'
@@ -674,6 +696,7 @@ class bot
 			$repo = $payload['repo'];
 			$repo_a = explode( '/', $repo );
 			
+			$comment['body'] = preg_replace( '/\s\s+/', ' ', $comment['body'] );
 			$msg = self::$config['unparsed_responses']['comments'];
 			$search = array(
 				'{repo}', '{user}', '{title}', '{message}', '{url}'

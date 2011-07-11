@@ -26,7 +26,7 @@ if ( $host !== 'github.com' )
 	die();
 // only deploy a payload if it's from github.com
 
-$payload = addslashes( $_POST['payload'] );
+$payload = $_POST['payload'];
 mysql_query( "INSERT INTO `".$config['mysql']['table']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".$payload."', '0', 'commit')" );
 // insert a payload into our database
 
