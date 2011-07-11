@@ -142,7 +142,7 @@ class bot
 		// connect the bot
 		
 		$this->xbot->timer->add( array( 'bot', 'listen_data', array( $this->xbot ) ), 5, 0 );
-		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 10, 0 );
+		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 30, 0 );
 		// set up some timers, we only actually go hunting for new data every 30 seconds, then if new data is found its stored
 		// the stored data is checked by listen_data every 5 seconds. We only check every 30 seconds because for huge repos like
 		// facebook's hiphop-php, which I developed this on it can be quite intensive, and plus the more often we check the quicker
@@ -475,9 +475,10 @@ class bot
 							if ( $rows['info_id'] == $rd['number'] )
 							{
 								$info_id = $ird;
-								break;
+								// we've found it!
+								unset( $data[$id][$ird] );
 							}
-							// we've found it!
+							// if we have this record, remove it.
 						}
 						// find the data row.
 						
@@ -506,18 +507,15 @@ class bot
 					}
 					// we have changed records!
 					
-					if ( $num_rows == count( $data[$id] ) )
+					if ( count( $data[$id] ) == 0 )
 						continue;
 					// no changes <3
 					
-					$rdata[$id] = array_slice( $data[$id], $num_rows );
-					// remove all the old crap.
-					
-					foreach ( $rdata[$id] as $i => $rep )
+					foreach ( $data[$id] as $i => $rep )
 					{
 						$timestamp = strtotime( $rep['created_at'] );
 						$number = $rep['number'];
-						$rdata[$id][$i]['repo'] = $git_chans['repo'];
+						$data[$id][$i]['repo'] = $git_chans['repo'];
 						
 						$changed++;
 						mysql_query( "INSERT INTO `".self::$config['mysql']['table_i']."` (`type`, `repo`, `info_id`, `timestamp`, `comments`) VALUES('".$id."', '".$git_chans['repo']."', '".$number."', '".$timestamp."', '".$rep['comments']."')" );
@@ -527,7 +525,7 @@ class bot
 					
 					if ( $git_chans['empty'] == 0 && ( $changed > 0 ) )
 					{
-						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $rdata ) )."', '0', '".$id."')" );
+						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $data ) )."', '0', '".$id."')" );
 					}
 					// we have changed records!
 				}
