@@ -1,0 +1,6 @@
+To install:
+
+Dump install.sql into a database, upload commit-tracker.php to a webserver and add it as a post-recieve hook in your repo (isn't required, if it isnt added the bot won't track commits)
+Configure github.php and run, enjoy.
+
+Questions to Ricki @ irc.ircnode.org/#lobby
