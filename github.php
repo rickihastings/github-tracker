@@ -70,13 +70,14 @@ class bot
 			// recursive calls checked every x seconds
 			
 			'unparsed_responses'	=> array(
-				'commits'	=> '{repo}: 3{user} 7{branch} * r{revision} / ({files}): {title} ({url})',
-				'issues'	=> '{repo}: 3{user} opened an issue at ({date}): {title} - {message} ({url})',
-				'pulls'		=> '{repo}: 3{user} has requested to merge 12{head_label} into 7{base_label}: {title} - {message} ({url})',
-				'comments'	=> '{repo}: 3{user} has commented on ({title}): {message} ({url})',
+				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
+				'issues'	=> '{repo}: 6{user} opened an issue at ({date}): {title} - {message} ({url})',
+				'pulls'		=> '{repo}: 6{user} has requested to merge 5{head_label} into 7{base_label}: {title} - {message} ({url})',
+				'comments'	=> '{repo}: 6{user} has commented on ({title}): {message} ({url})',
 				// unrequested responses, ie event based
-				'commit'	=> '{repo}: commit added by 3{user} on ({date}): {title} ({url})',
-				'issue'		=> '{repo}: #{id} opened by 3{user} on ({date}) ({comments}) (12{state}): {title} - {message} ({url})',
+				'commit'	=> '{repo}: commit added by 6{user} on ({date}): {title} ({url})',
+				'issue'		=> '{repo}: #{id} opened by 6{user} on ({date}) ({comments} {plural}) ({colour}{state}): {title} - {message} ({url})',
+				'pull'		=> '{repo}: pull request by 6{user} on ({date}) to merge 5{head_label} into 7{base_label} ({comments} {plural}) ({colour}{state}): {title} - {message} ({url})',
 				// requested responses, ie commands
 			),
 			// unparsed messages
@@ -86,20 +87,24 @@ class bot
 					'The following commands can be used.',
 					':track user/repo network/#channel',
 					':untrack user/repo',
-					':commit user/repo id',
-					':issue user/repo #id',
+					':commits user/repo id',
+					':issues user/repo #id',
+					':pulls user/repo #id',
 				),
 				'untrack_syntax'	=> 'Syntax is :untrack user/repo',
 				// :untrack error messages
-				'track_syntax'	=> 'Syntax is :track user/repo network/#channel',
-				'track_nonet'	=> 'I\'m currently not connected to that network, you can connect me to it using my config array.',
+				'track_syntax'		=> 'Syntax is :track user/repo network/#channel',
+				'track_nonet'		=> 'I\'m currently not connected to that network, you can connect me to it using my config array.',
 				// :track error messages
-				'commit_syntax'		=> 'Syntax is :commit user/repo id',
-				'commit_noid'		=> 'Invalid commit id, make sure it is a full commit id in sha hash form.',
+				'commits_syntax'		=> 'Syntax is :commits user/repo id',
+				'commits_noid'		=> 'Invalid commit id, make sure it is a full commit id in sha hash form.',
 				// :commit error messages
-				'issue_syntax'		=> 'Syntax is :issue user/repo #id',
-				'issue_noid'		=> 'Invalid issue id, make sure it is a valid id, prefixed with a hash (#).',
+				'issues_syntax'		=> 'Syntax is :issues user/repo #id',
+				'issues_noid'		=> 'Invalid issue id, make sure it is a valid id, prefixed with a hash (#).',
 				// :issue error messages
+				'pulls_syntax'		=> 'Syntax is :pulls user/repo #id',
+				'pulls_noid'			=> 'Invalid pull request id, make sure it is a valid id, prefixed with a hash (#).',
+				// :pull error messages
 				'invalid_repo'		=> 'Invalid repo, are you sure I\'m tracking it?',
 				'already_got_repo'	=> 'I\'m already tracking that repo.',
 				'access_denied'		=> 'Sorry, you don\'t have access to use that command.',
@@ -108,7 +113,7 @@ class bot
 			// error messages
 
 			'ctcp'		=> array(
-				'version'	=> 'Github v0.1 powered by xBot Framework',
+				'version'	=> 'Use me! And abuse me :3 https://github.com/n0valyfe/github-tracker',
 			),
 			// ctcp replies
 			
@@ -137,7 +142,11 @@ class bot
 		// connect the bot
 		
 		$this->xbot->timer->add( array( 'bot', 'listen_data', array( $this->xbot ) ), 5, 0 );
-		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 15, 0 );
+		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 30, 0 );
+		// set up some timers, we only actually go hunting for new data every 30 seconds, then if new data is found its stored
+		// the stored data is checked by listen_data every 5 seconds. We only check every 30 seconds because for huge repos like
+		// facebook's hiphop-php, which I developed this on it can be quite intensive, and plus the more often we check the quicker
+		// we can run out of api calls (unless you get on the whitelist)
 		$this->xbot->main( 'bot', 'main' );
 		// boot the main loop w/ a callback
 	}
@@ -270,11 +279,11 @@ class bot
 			}
 			// untrack command
 			
-			if ( strcasecmp( $messages[0], 'commit' ) == 0 )
+			if ( strcasecmp( $messages[0], 'commits' ) == 0 )
 			{
 				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['commit_syntax'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['commits_syntax'] );
 					return false;
 				}
 				// invalid syntax, this time we notify them unlike samantha :3
@@ -295,26 +304,29 @@ class bot
 				
 				if ( isset( $payload['error'] ) )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['commit_noid'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['commits_noid'] );
 					return false;
 				}
 				// invalid commit id - GAME OVER.
 				
 				$payload = $payload['commit'];
-				
+				$payload['message'] = preg_replace( '/\s\s+/', ' ', $payload['message'] );
 				$msg = self::$config['unparsed_responses']['commit'];
-				$msg = str_replace( '{repo}', $repo_a[1], $msg );
-				$msg = str_replace( '{user}', $payload['committer']['name'], $msg );
-				// str replce a few vars
 				
-				$date = strtotime( $payload['committed_date'] );
-				$date = date( 'd/m/Y i:H', $date );
-				$msg = str_replace( '{date}', $date, $msg );
-				// add the date
-			
-				$title = ( strlen( $payload['message'] ) > 150 ) ? substr( $payload['message'], 0, 150 ) : $payload['message'];
-				$msg = str_replace( '{title}', $title, $msg );
-				$msg = str_replace( '{url}', 'https://github.com/'.$payload['url'], $msg );
+				$search = array(
+					'{repo}', '{user}', '{date}', '{title}', '{url}'
+				);
+				
+				$replace = array(
+					$repo_a[1],
+					$payload['committer']['name'],
+					date( 'd/m/Y i:H', strtotime( $payload['committed_date'] ) ),
+					( strlen( $payload['message'] ) > 150 ) ? substr( $payload['message'], 0, 150 ).'..' : $payload['message'],
+					'https://github.com/'.$payload['url']
+				);
+				// compile a list of shite.
+				
+				$msg = str_replace( $search, $replace, $msg );
 				// compile a message
 				
 				$xbot->msg( $ircdata->from, $ircdata->target, $msg );
@@ -322,11 +334,12 @@ class bot
 			}
 			// someone has asked for a commit..
 			
-			if ( strcasecmp( $messages[0], 'issue' ) == 0 )
+			if ( strcasecmp( $messages[0], 'issues' ) == 0 || strcasecmp( $messages[0], 'pulls' ) == 0 )
 			{
+				$req = $messages[0];
 				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 || $messages[2][0] != '#' )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['issue_syntax'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_syntax'] );
 					return false;
 				}
 				// invalid syntax
@@ -343,46 +356,47 @@ class bot
 				}
 				// invalid repo
 				
-				$payload = self::call_api( 'http://github.com/api/v2/json/issues/show/'.$repo.'/'.$id );
+				$ext = ( $req == 'issues' ) ? '/show' : '';
+				$payload = self::call_api( 'http://github.com/api/v2/json/'.$req.$ext.'/'.$repo.'/'.$id );
 				
 				if ( isset( $payload['error'] ) )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['issue_noid'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_noid'] );
 					return false;
 				}
 				// invalid issue id
 				
-				$payload = $payload['issue'];
+				$payload = ( $req == 'issues' ) ? $payload['issue'] : $payload['pull'];
+				$payload['body'] = preg_replace( '/\s\s+/', ' ', $payload['body'] );
+				$msg = self::$config['unparsed_responses'][substr( $req, 0, -1 )];
 				
-				$msg = self::$config['unparsed_responses']['issue'];
-				$msg = str_replace( '{repo}', $repo_a[1], $msg );
-				$msg = str_replace( '{id}', $id, $msg );
-				$msg = str_replace( '{user}', $payload['user'], $msg );
-				// str replce a few vars
+				$search = array(
+					'{repo}', '{user}', '{id}', '{head_label}', '{base_label}', '{date}', '{colour}', '{state}', '{plural}', '{comments}', '{title}', '{message}', '{url}'
+				);
 				
-				$date = strtotime( $payload['created_at'] );
-				$date = date( 'd/m/Y i:H', $date );
-				$msg = str_replace( '{date}', $date, $msg );
-				// add the date
-			
-				$msg = str_replace( '{state}', $payload['state'], $msg );
-				$plural = ( $payload['comments'] == 1 ) ? ' comment' : ' comments';
-				$msg = str_replace( '{comments}', $payload['comments'] . $plural, $msg );
-				// state and comment number
+				$replace = array(
+					$repo_a[1],
+					( $req == 'issues' ) ? $payload['user'] : $payload['user']['login'],
+					$id,
+					$payload['head']['label'],
+					$payload['base']['label'],
+					date( 'd/m/Y i:H', strtotime( $payload['created_at'] ) ),
+					( $payload['state'] == 'open' ) ? '3' : '4',
+					$payload['state'],
+					( $payload['comments'] == 1 ) ? 'comment' : 'comments',
+					$payload['comments'],
+					( strlen( $payload['title'] ) > 50 ) ? substr( $payload['title'], 0, 50 ).'..' : $payload['title'],
+					( strlen( $payload['body'] ) > 150 ) ? substr( $payload['body'], 0, 150 ).'..' : $payload['body'],
+					( $req == 'issues' ) ? 'https://github.com/'.$repo.'/issues/'.$id : $payload['html_url']
+				);
+				// compile a list of search and replaces!
 				
-				$title = ( strlen( $payload['title'] ) > 150 ) ? substr( $payload['title'], 0, 150 ) : $payload['title'];
-				$msg = str_replace( '{title}', $title, $msg );
-				
-				$message = ( strlen( $payload['body'] ) > 150 ) ? substr( $payload['body'], 0, 150 ) : $payload['body'];
-				$msg = str_replace( '{message}', $message, $msg );
-				
-				$msg = str_replace( '{url}', 'https://github.com/'.$repo.'/issues/'.$id, $msg );
-				// compile a message
+				$msg = str_replace( $search, $replace, $msg );
 				
 				$xbot->msg( $ircdata->from, $ircdata->target, $msg );
 				// ok we've found a commit everything is good let's parse some stuff out of our json and fire it back <3
 			}
-			// someone has asked for an issue..
+			// someone has asked for an issue OR pull..
 		}
 		// look for prefix'd messages
 	}
@@ -403,7 +417,7 @@ class bot
 		{
 			while ( $data = mysql_fetch_array( $get_new_data_q ) )
 			{
-				$dpayload = stripslashes( preg_replace( array( '/\s{2,}/', '/[\t\n]/' ), ' ', $data['payload'] ) );
+				$dpayload = stripslashes( $data['payload'] );
 				$payload = json_decode( $dpayload, true );
 				
 				if ( $data['type'] == 'commit' )
@@ -524,19 +538,21 @@ class bot
 		foreach ( $payload['commits'] as $id => $commit )
 		{
 			$msg = self::$config['unparsed_responses']['commits'];
-			$msg = str_replace( '{repo}', $payload['repository']['name'], $msg );
-			$msg = str_replace( '{user}', $commit['author']['name'], $msg );
-			$msg = str_replace( '{branch}', $payload['repository']['integrate_branch'], $msg );
-			$msg = str_replace( '{revision}', substr( $commit['id'], 0, 7 ), $msg );
-			// str replce a few vars
-		
-			$files = ( count( $commit['modified'] ) > 3 ) ? count( $commit['modified'] ) . ' files' : implode( ' ', $commit['modified'] );
-			$msg = str_replace( '{files}', $files, $msg );
-			// compile a list of files
+			$search = array(
+				'{repo}', '{user}', '{branch}', '{revision}', '{files}', '{title}', '{url}'
+			);
 			
-			$title = ( strlen( $commit['message'] ) > 150 ) ? substr( $commit['message'], 0, 150 ).'..' : $commit['message'];
-			$msg = str_replace( '{title}', $title, $msg );
-			$msg = str_replace( '{url}', $commit['url'], $msg );
+			$replace = array(
+				$payload['repository']['name'],
+				$commit['author']['name'],
+				$payload['repository']['integrate_branch'],
+				substr( $commit['id'], 0, 7 ),
+				( count( $commit['modified'] ) > 3 ) ? count( $commit['modified'] ) . ' files' : implode( ' ', $commit['modified'] ),
+				( strlen( $commit['message'] ) > 150 ) ? substr( $commit['message'], 0, 150 ).'..' : $commit['message'],
+				$commit['url']
+			);
+			
+			$msg = str_replace( $search, $replace, $msg );
 			// compile a message
 			
 			$net = self::$config['repos'][$repo];
@@ -568,22 +584,20 @@ class bot
 			$repo_a = explode( '/', $repo );
 			
 			$msg = self::$config['unparsed_responses']['issues'];
-			$msg = str_replace( '{repo}', $repo_a[1], $msg );
-			$msg = str_replace( '{user}', $issue['user'], $msg );
-			// compile a list of shite
+			$search = array(
+				'{repo}', '{user}', '{date}', '{title}', '{message}', '{url}'
+			);
 			
-			$date = strtotime( $issue['created_at'] );
-			$date = date( 'd/m/Y i:H', $date );
-			$msg = str_replace( '{date}', $date, $msg );
-			// add the date
+			$replace = array(
+				$repo_a[1],
+				$issue['user'],
+				date( 'd/m/Y i:H', strtotime( $issue['created_at'] ) ),
+				( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
+				( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
+				$issue['html_url']
+			);
 			
-			$title = ( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'];
-			$msg = str_replace( '{title}', $title, $msg );
-			
-			$message = ( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'];
-			$msg = str_replace( '{message}', $message, $msg );
-			
-			$msg = str_replace( '{url}', $issue['html_url'], $msg );
+			$msg = str_replace( $search, $replace, $msg );
 			// compile a message
 			
 			$net = self::$config['repos'][$repo];
@@ -615,19 +629,21 @@ class bot
 			$repo_a = explode( '/', $repo );
 			
 			$msg = self::$config['unparsed_responses']['pulls'];
-			$msg = str_replace( '{repo}', $repo_a[1], $msg );
-			$msg = str_replace( '{user}', $pull['user']['login'], $msg );
-			$msg = str_replace( '{head_label}', $pull['head']['label'], $msg );
-			$msg = str_replace( '{base_label}', $pull['base']['label'], $msg );
-			// compile a list of shite
+			$search = array(
+				'{repo}', '{user}', '{head_label}', '{base_label}', '{title}', '{message}', '{url}'
+			);
 			
-			$title = ( strlen( $pull['title'] ) > 50 ) ? substr( $pull['title'], 0, 50 ).'..' : $pull['title'];
-			$msg = str_replace( '{title}', $title, $msg );
-			
-			$message = ( strlen( $pull['body'] ) > 150 ) ? substr( $pull['body'], 0, 150 ).'..' : $pull['body'];
-			$msg = str_replace( '{message}', $message, $msg );
-			
-			$msg = str_replace( '{url}', $pull['html_url'], $msg );
+			$replace = array(
+				$repo_a[1],
+				$pull['user']['login'],
+				$pull['head']['label'],
+				$pull['base']['label'],
+				( strlen( $pull['title'] ) > 50 ) ? substr( $pull['title'], 0, 50 ).'..' : $pull['title'],
+				( strlen( $pull['body'] ) > 150 ) ? substr( $pull['body'], 0, 150 ).'..' : $pull['body'],
+				$pull['html_url']
+			);
+
+			$msg = str_replace( $search, $replace, $msg );
 			// compile a message
 			
 			$net = self::$config['repos'][$repo];
@@ -659,17 +675,19 @@ class bot
 			$repo_a = explode( '/', $repo );
 			
 			$msg = self::$config['unparsed_responses']['comments'];
-			$msg = str_replace( '{repo}', $repo_a[1], $msg );
-			$msg = str_replace( '{user}', $comment['user'], $msg );
-			// compile a list of shite
+			$search = array(
+				'{repo}', '{user}', '{title}', '{message}', '{url}'
+			);
 			
-			$title = ( strlen( $payload['issue_title'] ) > 50 ) ? substr( $payload['issue_title'], 0, 50 ).'..' : $payload['issue_title'];
-			$msg = str_replace( '{title}', $title, $msg );
+			$replace = array(
+				$repo_a[1],
+				$comment['user'],
+				( strlen( $payload['issue_title'] ) > 50 ) ? substr( $payload['issue_title'], 0, 50 ).'..' : $payload['issue_title'],
+				( strlen( $comment['body'] ) > 150 ) ? substr( $comment['body'], 0, 150 ).'..' : $comment['body'],
+				'https://github.com/'.$repo.'/issues/'.$payload['repo_id'].'#issuecomment-'.$comment['id']
+			);
 			
-			$message = ( strlen( $comment['body'] ) > 150 ) ? substr( $comment['body'], 0, 150 ).'..' : $comment['body'];
-			$msg = str_replace( '{message}', $message, $msg );
-			
-			$msg = str_replace( '{url}', 'https://github.com/'.$repo.'/issues/'.$payload['repo_id'].'#issuecomment-'.$comment['id'], $msg );
+			$msg = str_replace( $search, $replace, $msg );
 			// compile a message
 			
 			$net = self::$config['repos'][$repo];
@@ -707,7 +725,7 @@ class bot
 		$rdata = curl_exec( $curl_handle );
 		curl_close( $curl_handle );
 		
-		return json_decode( $rdata, true );
+		return json_decode( preg_replace( '/\s\s+/', ' ', $rdata ), true );
 	}
 }
 
