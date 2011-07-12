@@ -29,9 +29,7 @@ class bot
 	static public $db;
 	static public $queries = 0;
 	static public $buffer = array();
-
-	static public $sock;
-	static public $client = array();
+	static public $debug = true;
 	// give $xbot framework a var; so we can use it all around the class.
 
 	/*
@@ -149,11 +147,15 @@ class bot
 			// admin hosts
 		);
 		
+		self::debug( 'connecting to mysql ('.self::$config['mysql']['host'].':'.self::$config['mysql']['db'].')' );
 		self::$db = mysql_connect( self::$config['mysql']['host'], self::$config['mysql']['user'], self::$config['mysql']['pass'] );
 		mysql_select_db( self::$config['mysql']['db'], self::$db );
 		// connect to mysql
 		
+		foreach ( self::$config['networks'] as $network => $net_data )
+			self::debug( 'connecting to ('.$network.':'.$net_data['port'].') as '.$net_data['nick'] );
 		$this->xbot->connect( self::$config );
+		self::debug( 'connected to networks' );
 		// connect the bot
 		
 		$this->xbot->timer->add( array( 'bot', 'listen_data', array( $this->xbot ) ), 5, 0 );
@@ -184,6 +186,8 @@ class bot
 				self::$config['networks'][$chan[0]]['chans'][$chan[1]] = '';
 				self::$config['repos'][$git_chans['repo']] = array( $chan[0], $chan[1] );
 				$xbot->join( $chan[0], $chan[1] );
+				
+				self::debug( 'tracking '.$git_chans['repo'].' in '.$git_chans['chan'] );
 			}
 			// grab gitchans
 		}
@@ -252,11 +256,14 @@ class bot
 					self::get_new_data( $xbot );
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['track_new_repo_2'] );
 					// and let's download some data!
+					
+					self::debug( $ircdata->nick.' used :track (repo: '.$repo.'; chan: '.$info.')' );
 				}
 				// track command
 				else
 				{
 					$info = self::$config['repos'][$repo];
+					$info_a = explode( '/', $info );
 					mysql_query( "DELETE FROM `".self::$config['mysql']['table_c']."` WHERE `repo` = '".$repo."'" );
 					mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$repo."'" );
 					
@@ -265,20 +272,22 @@ class bot
 					{
 						if ( $repo_id == $repo )
 							continue;
-						if ( $chan_id[0] == $info[0] && $chan_id[1] == $info[1] )
+						if ( $chan_id[0] == $info_a[0] && $chan_id[1] == $info_a[1] )
 							$used_elsewhere = true;
 					}
 					// everything seems to be good! let's start tracking buddy.
 					
 					if ( !$used_elsewhere )
 					{
-						$xbot->part( $info[0], $info[1] );
+						$xbot->part( $info_a[0], $info_a[1] );
 						unset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] );
 					}
 					// it isn't used elsewhere let's go.
 					
 					$xbot->notice( $ircdata->from, $ircdata->nick, str_replace( '{repo}', $repo, self::$config['error_messages']['untrack_repo'] ) );
 					unset( self::$config['repos'][$repo] );
+					
+					self::debug( $ircdata->nick.' used :untrack (repo: '.$repo.'; chan: '.$info.')' );
 				}
 			}
 			// (un)track command
@@ -324,6 +333,8 @@ class bot
 						return false;
 					}
 					// we're already in network/#channel
+					
+					self::debug( $ircdata->nick.' used :join (chan: '.$info.')' );
 				}
 				// :join
 				else
@@ -354,6 +365,8 @@ class bot
 						unset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] );
 					}
 					// leave the chan, or tell them we can't
+					
+					self::debug( $ircdata->nick.' used :part (chan: '.$info.')' );
 				}
 				// :part
 			}
@@ -431,6 +444,8 @@ class bot
 				
 				$xbot->msg( $ircdata->from, $ircdata->target, $msg );
 				// ok we've found a commit everything is good let's parse some stuff out of our json and fire it back <3
+				
+				self::debug( $ircdata->nick.' used :commit (repo: '.$repo.'; id: '.$id.')' );
 			}
 			// someone has asked for a commit..
 			
@@ -495,6 +510,8 @@ class bot
 				
 				$xbot->msg( $ircdata->from, $ircdata->target, $msg );
 				// ok we've found a commit everything is good let's parse some stuff out of our json and fire it back <3
+				
+				self::debug( $ircdata->nick.' used :'.$rep.' (repo: '.$repo.'; id: '.$id.')' );
 			}
 			// someone has asked for an issue OR pull..
 		}
@@ -547,14 +564,43 @@ class bot
 		$git_chans_q = mysql_query( "SELECT `id`, `repo`, `chan`, `empty` FROM `".self::$config['mysql']['table_c']."`" );
 		while ( $git_chans = mysql_fetch_array( $git_chans_q ) )
 		{
+			self::debug( 'scanning '.$git_chans['repo'] );
 			$repo_a = explode( '/', $git_chans['repo'] );
-		
+			
+			$multi_handle = curl_multi_init();
+			
 			foreach ( self::$config['recursive_api_calls'] as $id => $call )
 			{
+				$curl_handle[$id] = curl_init();
+				// init a curl handler
+				
+				curl_setopt( $curl_handle[$id], CURLOPT_HEADER, false );
+				curl_setopt( $curl_handle[$id], CURLOPT_RETURNTRANSFER, true );
+				// init a multi curl handle ! YEAH
+			
 				$call = str_replace( '{user}', $repo_a[0], $call );
 				$call = str_replace( '{repo}', $repo_a[1], $call );
-				$data = self::call_api( $call );
 				
+				curl_setopt( $curl_handle[$id], CURLOPT_URL, $call );
+				curl_multi_add_handle( $multi_handle, $curl_handle[$id] );
+			}
+			
+			$active = null;
+			do {
+				$mrc = curl_multi_exec( $multi_handle, $active );
+			} while ( $active > 0 );
+			// do while executing the curl handles
+			
+			foreach ( self::$config['recursive_api_calls'] as $id => $call )
+			{
+				$calls[$id] = json_decode( preg_replace( '/\s\s+/', ' ', curl_multi_getcontent( $curl_handle[$id] ) ), true );
+				curl_multi_remove_handle( $multi_handle, $curl_handle[$id] );
+			}
+			// get the data and close the handles.
+			curl_multi_close( $multi_handle );
+			
+			foreach ( $calls as $id => $data )
+			{
 				if ( empty( $data[$id] ) )
 					continue;
 				// response is empty, move on.
@@ -570,21 +616,21 @@ class bot
 					
 					while ( $rows = mysql_fetch_array( $git_reps_q ) )
 					{
-						$remove_me = true;
+						$found = false;
 						foreach ( $data[$id] as $ird => $rd )
 						{
 							if ( $rows['info_id'] == $rd['number'] )
 							{
-								$info_id = $ird;
-								$remove_me = false;
-								unset( $data[$id][$ird] );
+								$found = true;
 								break;
 								// set a few important things
 							}
 							// if we have this record, remove it.
 						}
 						
-						if ( $remove_me )
+						if ( $found )
+							unset( $data[$id][$ird] );						
+						else
 							mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `info_id` = '".$rows['info_id']."' AND `type` = '".$id."'" );
 						// this is complicated to explain, and it was to figure out, so
 						// we loop through the data we recieve from github, say issues, for example
@@ -592,9 +638,9 @@ class bot
 						// whether to add it (by unsetting everything but THAT record). if we have it
 						// in the database but not in $data, we don't need it anymore, (ie it's been closed)
 						
-						if ( $rows['comments'] < $data[$id][$info_id]['comments'] )
+						if ( $rows['comments'] < $data[$id][$ird]['comments'] )
 						{
-							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$data[$id][$info_id]['comments']."' WHERE `id` = '".$rows['id']."'" );
+							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$data[$id][$ird]['comments']."' WHERE `id` = '".$rows['id']."'" );
 							// update our new comment limit
 							
 							$ccall = 'http://github.com/api/v2/json/issues/comments/'.$git_chans['repo'].'/'.$rows['info_id'];
@@ -602,7 +648,7 @@ class bot
 							$ncdata['comments'] = array_slice( $cdata['comments'], $rows['comments'] );
 							$ncdata['repo'] = $git_chans['repo'];
 							$ncdata['repo_id'] = $rows['info_id'];
-							$ncdata['issue_title'] = $data[$id][$info_id]['title'];
+							$ncdata['issue_title'] = $data[$id][$ird]['title'];
 							
 							$comments++;
 							// we need to find out which comments are new.
@@ -838,7 +884,7 @@ class bot
 	}
 	
 	/*
-	* call_api
+	* call_api (not used for recursive calls)
 	*
 	* @params
 	* $url < url to call
@@ -859,6 +905,18 @@ class bot
 		curl_close( $curl_handle );
 		
 		return json_decode( preg_replace( '/\s\s+/', ' ', $rdata ), true );
+	}
+	
+	/*
+	* debug
+	*
+	* @params
+	* $msg < debug message
+	*/
+	static public function debug( $msg )
+	{
+		if ( self::$debug )
+			print '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\r\n";
 	}
 }
 
