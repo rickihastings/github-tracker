@@ -71,7 +71,7 @@ class bot
 			
 			'unparsed_responses'	=> array(
 				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
-				'issues'	=> '{repo}: 6{user} opened an issue at ({date}): {title} - {message} ({url}){pull_request}',
+				'issues'	=> '{repo}: 6{user} {plural} issue #{id} at ({date}): {title} - {message} ({url}){pull_request}',
 				'pulls'		=> '{repo}: 6{user} has requested to merge 5{head_label} into 7{base_label}: {title} - {message} ({url})',
 				'comments'	=> '{repo}: 6{user} has commented on ({title}): {message} ({url})',
 				// unrequested responses, ie event based
@@ -84,17 +84,32 @@ class bot
 			
 			'error_messages'		=> array(
 				'help_messages'		=> array(
-					'The following commands can be used.',
-					':track user/repo network/#channel',
-					':untrack user/repo',
-					':commits user/repo id',
-					':issues user/repo #id',
-					':pulls user/repo #id',
+					'The following commands can be used in channel or via pm.',
+					'  :commits user/repo id',
+					'  :issues user/repo #id',
+					'  :pulls user/repo #id',
 				),
+				'admin_help_msgs'	=> array(
+					'The following commands are admin only and can only be used via pm.',
+					'  :track user/repo network/#channel',
+					'  :untrack user/repo',
+					'  :join network/#channel',
+					'  :part network/#channel',
+				),
+				// help messages
+				'join_syntax'		=> 'Syntax is :join network/#channel',
+				'part_syntax'		=> 'Syntax is :part network/#channel',
+				'join_already_in'	=> 'I\'m already in that channel!',
+				'part_not_in'		=> 'I\'m not in that channel!',
+				'part_already_track'=> 'I\'m currently tracking in this channel, if you wish to stop, see :untrack',
+				// :join/part error messages
 				'untrack_syntax'	=> 'Syntax is :untrack user/repo',
+				'untrack_repo'		=> 'Sucessfully stopped tracking {repo}',
 				// :untrack error messages
 				'track_syntax'		=> 'Syntax is :track user/repo network/#channel',
 				'track_nonet'		=> 'I\'m currently not connected to that network, you can connect me to it using my config array.',
+				'track_new_repo_1'	=> 'Now tracking {repo} in {chan}. Collecting repo information...',
+				'track_new_repo_2'	=> '... Done, repo now being tracked.',
 				// :track error messages
 				'commits_syntax'		=> 'Syntax is :commits user/repo id',
 				'commits_noid'		=> 'Invalid commit id, make sure it is a full commit id in sha hash form.',
@@ -173,21 +188,15 @@ class bot
 			// grab gitchans
 		}
 		
-		if ( $ircdata->type == 'privmsg' && $ircdata->message[0] == ':' )
+		if ( $ircdata->type == 'privmsg' && $ircdata->target == self::$config['networks'][$ircdata->from]['nick'] && $ircdata->message[0] == ':' )
 		{
 			$message = substr( $ircdata->message, 1 );
 			$messages = explode( ' ', $message );
 			// parse up message
-			
-			if ( strcasecmp( $messages[0], 'help' ) == 0 )
+		
+			if ( strcasecmp( $messages[0], 'track' ) == 0 || strcasecmp( $messages[0], 'untrack' ) == 0 )
 			{
-				foreach ( self::$config['error_messages']['help_messages'] as $i => $line )
-					$xbot->notice( $ircdata->from, $ircdata->nick, $line );
-			}
-			// help message
-			
-			if ( strcasecmp( $messages[0], 'track' ) == 0 )
-			{
+				$req = strtolower( $messages[0] );
 				if ( !in_array( $ircdata->host, self::$config['admin_hosts'] ) )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['access_denied'] );
@@ -195,9 +204,11 @@ class bot
 				}
 				// they don't have access to use this command.
 			
-				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 || substr_count( $messages[2], '/' ) == 0 )
+				if ( ( $req == 'track' && ( count( $messages ) < 3 ) ) || ( $req == 'untrack' && ( count( $messages ) < 2 ) ) ||
+					 ( substr_count( $messages[1], '/' ) == 0 ) ||
+					 ( ( $req == 'untrack' ) && ( substr_count( $messages[2], '/' ) == 0 ) ) )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['track_syntax'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_syntax'] );
 					return false;
 				}
 				// invalid syntax
@@ -208,32 +219,73 @@ class bot
 				// TODO: currently we don't check if $repo is a valid git repo, which may cause hassle
 				//       we'll check it soon, cba atm. 
 				
-				if ( isset( self::$config['repos'][$repo] ) )
+				if ( $req == 'track' && isset( self::$config['repos'][$repo] ) ||
+					 ( $req == 'untrack' && !isset( self::$config['repos'][$repo] ) ) )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['already_got_repo'] );
 					return false;
 				}
 				// we're already tracking that repo, silly git (no pun intended!)
 				
-				if ( !isset( self::$config['networks'][$info_a[0]] ) )
+				if ( $req == 'track' && !isset( self::$config['networks'][$info_a[0]] ) )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['track_nonet'] );
 					return false;
 				}
 				// are we connected to network?
 				
-				mysql_query( "INSERT INTO `".self::$config['mysql']['table_c']."` (`repo`, `chan`, `empty`) VALUES('".$repo."', '".$info."', '1')" );
-				
-				if ( !isset( self::$config['networks'][$info_a[0]][$info_a[1]] ) )
-					$xbot->join( $info_a[0], $info_a[1] );
-				// everything seems to be good! let's start tracking buddy.
-				
-				self::$config['repos'][$repo] = array( $info_a[0], $info_a[1] );
+				if ( $req == 'track' )
+				{
+					mysql_query( "INSERT INTO `".self::$config['mysql']['table_c']."` (`repo`, `chan`, `empty`) VALUES('".$repo."', '".$info."', '1')" );
+					
+					$search = array( '{repo}', '{chan}' );
+					$replace = array( $repo, $info );
+					$xbot->notice( $ircdata->from, $ircdata->nick, str_replace( $search, $replace, self::$config['error_messages']['track_new_repo_1'] ) );
+					if ( !isset( self::$config['networks'][$info_a[0]][$info_a[1]] ) )
+					{
+						$xbot->join( $info_a[0], $info_a[1] );
+						self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] = '';
+					}
+					// everything seems to be good! let's join the channel
+					
+					self::$config['repos'][$repo] = array( $info_a[0], $info_a[1] );
+					self::get_new_data( $xbot );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['track_new_repo_2'] );
+					// and let's download some data!
+				}
+				// track command
+				else
+				{
+					$info = self::$config['repos'][$repo];
+					mysql_query( "DELETE FROM `".self::$config['mysql']['table_c']."` WHERE `repo` = '".$repo."'" );
+					mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$repo."'" );
+					
+					$used_elsewhere = false;
+					foreach ( self::$config['repos'] as $repo_id => $chan_id )
+					{
+						if ( $repo_id == $repo )
+							continue;
+						if ( $chan_id[0] == $info[0] && $chan_id[1] == $info[1] )
+							$used_elsewhere = true;
+					}
+					// everything seems to be good! let's start tracking buddy.
+					
+					if ( !$used_elsewhere )
+					{
+						$xbot->part( $info[0], $info[1] );
+						unset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] );
+					}
+					// it isn't used elsewhere let's go.
+					
+					$xbot->notice( $ircdata->from, $ircdata->nick, str_replace( '{repo}', $repo, self::$config['error_messages']['untrack_repo'] ) );
+					unset( self::$config['repos'][$repo] );
+				}
 			}
-			// track command
+			// (un)track command
 			
-			if ( strcasecmp( $messages[0], 'untrack' ) == 0 )
+			if ( strcasecmp( $messages[0], 'join' ) == 0 || strcasecmp( $messages[0], 'part' ) == 0 )
 			{
+				$req = strtolower( $messages[0] );
 				if ( !in_array( $ircdata->host, self::$config['admin_hosts'] ) )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['access_denied'] );
@@ -243,41 +295,89 @@ class bot
 				
 				if ( count( $messages ) < 2 || substr_count( $messages[1], '/' ) == 0 )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['untrack_syntax'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_syntax'] );
 					return false;
 				}
 				// invalid syntax
 				
-				$repo = $messages[1];
+				$info = $messages[1];
+				$info_a = explode( '/', $info );
 				
-				if ( !isset( self::$config['repos'][$repo] ) )
+				if ( !isset( self::$config['networks'][$info_a[0]] ) )
 				{
-					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['invalid_repo'] );
+					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['track_nonet'] );
 					return false;
 				}
-				// we're not tracking this repo
+				// are we connected to network?
 				
-				$info = self::$config['repos'][$repo];
-				mysql_query( "DELETE FROM `".self::$config['mysql']['table_c']."` WHERE `repo` = '".$repo."'" );
-				mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$repo."'" );
-				
-				$used_elsewhere = false;
-				foreach ( self::$config['repos'] as $repo_id => $chan_id )
+				if ( $req == 'join' )
 				{
-					if ( $repo_id == $repo )
-						continue;
-					if ( $chan_id[0] == $info[0] && $chan_id[1] == $info[1] )
-						$used_elsewhere = true;
+					if ( !isset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] ) )
+					{
+						$xbot->join( $info_a[0], $info_a[1] );
+						self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] = '';
+					}
+					// we're good, let's idle!
+					else
+					{
+						$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['join_already_in'] );
+						return false;
+					}
+					// we're already in network/#channel
 				}
-				// everything seems to be good! let's start tracking buddy.
+				// :join
+				else
+				{
+					if ( !isset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] ) )
+					{
+						$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['part_not_in'] );
+						return false;
+					}
+					// we're not even in the channel AT ALL.
 				
-				if ( !$used_elsewhere )
-					$xbot->part( $info[0], $info[1] );
-				// it isn't used elsewhere let's go.
-				
-				unset( self::$config['repos'][$repo] );
+					$tracking_in_chan = false;
+					foreach ( self::$config['repos'] as $repo_id => $chan_id )
+					{
+						if ( $chan_id[0] == $info_a[0] && $chan_id[1] == $info_a[1] )
+							$tracking_in_chan = true;
+					}
+					// find out if we're tracking here or not.
+					
+					if ( $tracking_in_chan )
+					{
+						$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['part_already_track'] );
+						return false;
+					}
+					else
+					{
+						$xbot->part( $info_a[0], $info_a[1] );
+						unset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] );
+					}
+					// leave the chan, or tell them we can't
+				}
+				// :part
 			}
-			// untrack command
+			// join && part commands
+		}
+		// admin only commands
+		
+		if ( $ircdata->type == 'privmsg' && $ircdata->message[0] == ':' )
+		{
+			$message = substr( $ircdata->message, 1 );
+			$messages = explode( ' ', $message );
+			// parse up message
+			
+			if ( strcasecmp( $messages[0], 'help' ) == 0 )
+			{
+				foreach ( self::$config['error_messages']['help_messages'] as $i => $line )
+					$xbot->notice( $ircdata->from, $ircdata->nick, $line );
+				if ( in_array( $ircdata->host, self::$config['admin_hosts'] ) )
+				{
+					foreach ( self::$config['error_messages']['admin_help_msgs'] as $i => $line )
+						$xbot->notice( $ircdata->from, $ircdata->nick, $line );
+				}
+			}
+			// help message
 			
 			if ( strcasecmp( $messages[0], 'commits' ) == 0 )
 			{
@@ -336,7 +436,7 @@ class bot
 			
 			if ( strcasecmp( $messages[0], 'issues' ) == 0 || strcasecmp( $messages[0], 'pulls' ) == 0 )
 			{
-				$req = $messages[0];
+				$req = strtolower( $messages[0] );
 				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 || $messages[2][0] != '#' )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_syntax'] );
@@ -470,17 +570,27 @@ class bot
 					
 					while ( $rows = mysql_fetch_array( $git_reps_q ) )
 					{
+						$remove_me = true;
 						foreach ( $data[$id] as $ird => $rd )
 						{
 							if ( $rows['info_id'] == $rd['number'] )
 							{
 								$info_id = $ird;
-								// we've found it!
+								$remove_me = false;
 								unset( $data[$id][$ird] );
+								break;
+								// set a few important things
 							}
 							// if we have this record, remove it.
 						}
-						// find the data row.
+						
+						if ( $remove_me )
+							mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `info_id` = '".$rows['info_id']."' AND `type` = '".$id."'" );
+						// this is complicated to explain, and it was to figure out, so
+						// we loop through the data we recieve from github, say issues, for example
+						// and we check if we have the issue in our database, if we don't, we know
+						// whether to add it (by unsetting everything but THAT record). if we have it
+						// in the database but not in $data, we don't need it anymore, (ie it's been closed)
 						
 						if ( $rows['comments'] < $data[$id][$info_id]['comments'] )
 						{
@@ -499,7 +609,7 @@ class bot
 						}
 						// means we have new comments!
 					}
-					// look for comment changes
+					// look for comment changes & other crap, see large comment above.
 					
 					if ( $git_chans['empty'] == 0 && ( $comments > 0 ) )
 					{
@@ -603,12 +713,14 @@ class bot
 			$issue['body'] = preg_replace( '/\s\s+/', ' ', $issue['body'] );
 			$msg = self::$config['unparsed_responses']['issues'];
 			$search = array(
-				'{repo}', '{user}', '{date}', '{title}', '{message}', '{url}', '{pull_request}'
+				'{repo}', '{user}', '{plural}', '{id}', '{date}', '{title}', '{message}', '{url}', '{pull_request}'
 			);
 			
 			$replace = array(
 				$repo_a[1],
 				$issue['user'],
+				( !isset( $issue['closed_at'] ) ) ? 'opened' : 'reopened',
+				$issue['number'],
 				date( 'd/m/Y i:H', strtotime( $issue['created_at'] ) ),
 				( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
 				( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
