@@ -45,7 +45,7 @@ class bot
 
 		self::$config = array(
 			'networks' 		=> array(
-				'localhost'	=> array(
+				'dev.ircnode.org'	=> array(
 					'port' 			=> '6667',
 
 					'nick' 			=> 'Github',
@@ -54,6 +54,16 @@ class bot
 					'chans'			=> array(), // DO NOT USE.
 				),
 				// network one
+				
+				'localhost'	=> array(
+					'port' 			=> '6667',
+
+					'nick' 			=> 'Github',
+					'ident' 		=> 'github',
+					'real' 			=> 'Github Tracker',
+					'chans'			=> array(), // DO NOT USE.
+				),
+				// network two
 			),
 			
 			'repos' 	=> array(
@@ -208,9 +218,8 @@ class bot
 				}
 				// they don't have access to use this command.
 			
-				if ( ( $req == 'track' && ( count( $messages ) < 3 ) ) || ( $req == 'untrack' && ( count( $messages ) < 2 ) ) ||
-					 ( substr_count( $messages[1], '/' ) == 0 ) ||
-					 ( ( $req == 'untrack' ) && ( substr_count( $messages[2], '/' ) == 0 ) ) )
+				if ( ( $req == 'track' && ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 || substr_count( $messages[2], '/' ) == 0 ) ) || 
+					 ( $req == 'untrack' && ( count( $messages ) < 2 || substr_count( $messages[1], '/' ) == 0 ) ) )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages'][$req.'_syntax'] );
 					return false;
@@ -263,7 +272,6 @@ class bot
 				else
 				{
 					$info = self::$config['repos'][$repo];
-					$info_a = explode( '/', $info );
 					mysql_query( "DELETE FROM `".self::$config['mysql']['table_c']."` WHERE `repo` = '".$repo."'" );
 					mysql_query( "DELETE FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$repo."'" );
 					
@@ -272,15 +280,15 @@ class bot
 					{
 						if ( $repo_id == $repo )
 							continue;
-						if ( $chan_id[0] == $info_a[0] && $chan_id[1] == $info_a[1] )
+						if ( $chan_id[0] == $info[0] && $chan_id[1] == $info[1] )
 							$used_elsewhere = true;
 					}
 					// everything seems to be good! let's start tracking buddy.
 					
 					if ( !$used_elsewhere )
 					{
-						$xbot->part( $info_a[0], $info_a[1] );
-						unset( self::$config['networks'][$info_a[0]]['chans'][$info_a[1]] );
+						$xbot->part( $info[0], $info[1] );
+						unset( self::$config['networks'][$info[0]]['chans'][$info[1]] );
 					}
 					// it isn't used elsewhere let's go.
 					
