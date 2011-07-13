@@ -61,15 +61,9 @@ class bot
 			),
 			// github repos now automatically populated from mysql
 			
-			'recursive_api_calls'	=> array(
-				'issues' 	=> 'http://github.com/api/v2/json/issues/list/{user}/{repo}/open',
-				'pulls'		=> 'http://github.com/api/v2/json/pulls/{user}/{repo}/open',
-			),
-			// recursive calls checked every x seconds
-			
 			'unparsed_responses'	=> array(
 				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
-				'issues'	=> '{repo}: 6{user} {colour}{plural} issue #{id} at ({date}): {title} - {message} ({url}){pull_request}',
+				'issues'	=> '{repo}: 6{user} {colour}{plural} issue #{id} at ({date}): {title} - {message} ({url})',
 				'pulls'		=> '{repo}: 6{user} has requested to merge 5{head_label} into 7{base_label}: {title} - {message} ({url})',
 				'comments'	=> '{repo}: 6{user} has commented on ({title}) (#{id}): {message} ({url})',
 				// unrequested responses, ie event based
@@ -540,8 +534,6 @@ class bot
 					self::parse_commits( $xbot, $repo, $payload );
 				if ( $data['type'] == 'issues' )
 					self::parse_issues( $xbot, $payload );
-				if ( $data['type'] == 'pulls' )
-					self::parse_pulls( $xbot, $payload );
 				if ( $data['type'] == 'comments' )
 					self::parse_comments( $xbot, $payload );
 				// parse commits
@@ -567,156 +559,127 @@ class bot
 			self::debug( 'scanning '.$git_chans['repo'] );
 			$repo_a = explode( '/', $git_chans['repo'] );
 			
-			$multi_handle = curl_multi_init();
+			$call = 'http://github.com/api/v2/json/issues/list/'.$git_chans['repo'].'/open';
+			$data = self::call_api( $call );
+			$id = 'issues';
 			
-			foreach ( self::$config['recursive_api_calls'] as $id => $call )
+			$changed = $comments = 0;
+			// find out how many are actually new, if none are we don't bother inserting into
+			// our post recieve data table or we fast end up with a HUGE table.
+			
+			$git_reps_q = mysql_query( "SELECT `id`, `repo`, `info_id`, `comments`, `type`, `closed` FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$git_chans['repo']."'" );
+			$num_rows = mysql_num_rows( $git_reps_q );
+			
+			while ( $rows = mysql_fetch_array( $git_reps_q ) )
 			{
-				$curl_handle[$id] = curl_init();
-				// init a curl handler
-				
-				curl_setopt( $curl_handle[$id], CURLOPT_HEADER, false );
-				curl_setopt( $curl_handle[$id], CURLOPT_RETURNTRANSFER, true );
-				// init a multi curl handle ! YEAH
-			
-				$call = str_replace( '{user}', $repo_a[0], $call );
-				$call = str_replace( '{repo}', $repo_a[1], $call );
-				
-				curl_setopt( $curl_handle[$id], CURLOPT_URL, $call );
-				curl_multi_add_handle( $multi_handle, $curl_handle[$id] );
-			}
-			
-			$active = null;
-			do {
-				$mrc = curl_multi_exec( $multi_handle, $active );
-			} while ( $active > 0 );
-			// do while executing the curl handles
-			
-			foreach ( self::$config['recursive_api_calls'] as $id => $call )
-			{
-				$calls[$id] = json_decode( preg_replace( '/\s\s+/', ' ', curl_multi_getcontent( $curl_handle[$id] ) ), true );
-				curl_multi_remove_handle( $multi_handle, $curl_handle[$id] );
-			}
-			// get the data and close the handles.
-			curl_multi_close( $multi_handle );
-		
-			foreach ( $calls as $id => $data )
-			{
-				if ( $id == ( 'issues' || 'pulls' ) )
-				{
-					$changed = $comments = 0;
-					// find out how many are actually new, if none are we don't bother inserting into
-					// our post recieve data table or we fast end up with a HUGE table.
-					
-					$git_reps_q = mysql_query( "SELECT `id`, `repo`, `info_id`, `comments`, `type`, `closed` FROM `".self::$config['mysql']['table_i']."` WHERE `repo` = '".$git_chans['repo']."' AND `type` = '".$id."'" );
-					$num_rows = mysql_num_rows( $git_reps_q );
-					
-					while ( $rows = mysql_fetch_array( $git_reps_q ) )
+				$found = false;
+				foreach ( $data[$id] as $ird => $rd )
+				{		
+					if ( $rows['info_id'] == $rd['number'] )
 					{
-						$found = false;
-						foreach ( $data[$id] as $ird => $rd )
-						{
-							if ( $rows['info_id'] == $rd['number'] )
-							{
-								$found = true;
-								break;
-								// set a few important things
-							}
-							// if we have this record, remove it.
-						}
-						
-						if ( $found === false )
-						{
-							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '1' WHERE `id` = '".$rows['id']."'" );
-							
-							$ccall = 'http://github.com/api/v2/json/issues/show/'.$git_chans['repo'].'/'.$rows['info_id'];
-							$ndata = self::call_api( $ccall );
-							$new_id = substr( $id, 0, -1 );
-							$ndata[$new_id]['dont_add'] = 1;
-							$ndata[$new_id]['closed'] = $rows['closed'];
-							$data[$id][] = $ndata[$new_id];
-						}
-						// this is complicated to explain, and it was to figure out, so
-						// we loop through the data we recieve from github, say issues, for example
-						// and we check if we have the issue in our database, if we don't, we know
-						// whether to add it (by unsetting everything but THAT record). if we have it
-						// in the database but not in $data, we don't need it anymore, (ie it's been closed)
-						
-						if ( $found && $rows['closed'] == 0 )
-						{
-							unset( $data[$id][$ird] );
-						}
-						else if ( $found && $rows['closed'] == 1 )
-						{
-							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '1' WHERE `id` = '".$rows['id']."'" );
-							$data[$id][$ird]['closed'] = $rows['closed'];
-							$data[$id][$ird]['dont_add'] = 1;
-						}
-						// check whether it's being closed, or it's already open
-						
-						if ( $found && ( $rows['comments'] < $rd['comments'] ) )
-						{
-							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$rd['comments']."' WHERE `id` = '".$rows['id']."'" );
-							// update our new comment limit
-							
-							$ccall = 'http://github.com/api/v2/json/issues/comments/'.$git_chans['repo'].'/'.$rows['info_id'];
-							$cdata = self::call_api( $ccall );
-							$cdata['comments'] = array_slice( $cdata['comments'], $rows['comments'] );
-							$cdata['repo'] = $git_chans['repo'];
-							$cdata['repo_id'] = $rows['info_id'];
-							$cdata['issue_title'] = $rd['title'];
-							
-							$comments++;
-							// we need to find out which comments are new.
-						}
-						// means we have new comments!
+						$found = true;
+						break;
+						// set a few important things
 					}
-					// look for comment changes & other crap, see large comment above.
-					
-					if ( $git_chans['empty'] == 0 && ( $comments > 0 ) )
-					{
-						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $cdata ) )."', '0', 'comments')" );
-					}
-					// we have changed records!
-					
-					if ( count( $data[$id] ) == 0 )
-						continue;
-					// no changes <3
-					
-					foreach ( $data[$id] as $i => $rep )
-					{
-						if ( isset( $rep['pull_request_url'] ) )
-						{
-							unset( $data[$id][$i] );
-							continue;
-						}
-						// check if the issue has a pull_request_url, this will stop the following from happening
-						// n0valyfe has opened issue #2048
-						// n0valyfe has requested to merge ..
-						// ^ these happen at the same time when someone opens a pull request
-					
-						$timestamp = strtotime( $rep['created_at'] );
-						$number = $rep['number'];
-						$state = ( $rep['state'] == 'open' ) ? 0 : 1;
-						$data[$id][$i]['repo'] = $git_chans['repo'];
-						
-						$changed++;
-						if ( !isset( $rep['dont_add'] ) )
-							mysql_query( "INSERT INTO `".self::$config['mysql']['table_i']."` (`type`, `repo`, `info_id`, `timestamp`, `comments`, `closed`) VALUES('".$id."', '".$git_chans['repo']."', '".$number."', '".$timestamp."', '".$rep['comments']."', '".$state."')" );
-						else
-							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '0' WHERE `type` = '".$id."' AND `info_id` = '".$rep['number']."'" );
-						// check if the issue is new or not, if it is insert it into our issue table so
-						// we don't recognise it again, and also pass info into our post_recieve table
-					}
-					
-					if ( $git_chans['empty'] == 0 && ( $changed > 0 ) )
-					{
-						mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $data ) )."', '0', '".$id."')" );
-					}
-					// we have changed records!
+					// if we have this record, remove it.
 				}
-				// loop through issues and pulls and find out which ones are new.
+				
+				if ( $found === false )
+				{
+					mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '1' WHERE `id` = '".$rows['id']."'" );
+					
+					$ccall = 'http://github.com/api/v2/json/issues/show/'.$git_chans['repo'].'/'.$rows['info_id'];
+					$ndata = self::call_api( $ccall );
+					$new_id = substr( $id, 0, -1 );
+					$ndata[$new_id]['dont_add'] = 1;
+					$ndata[$new_id]['closed'] = $rows['closed'];
+					$data[$id][] = $ndata[$new_id];
+				}
+				// this is complicated to explain, and it was to figure out, so
+				// we loop through the data we recieve from github, say issues, for example
+				// and we check if we have the issue in our database, if we don't, we know
+				// whether to add it (by unsetting everything but THAT record). if we have it
+				// in the database but not in $data, we don't need it anymore, (ie it's been closed)
+				
+				if ( $found && $rows['closed'] == 0 )
+				{
+					unset( $data[$id][$ird] );
+				}
+				else if ( $found && $rows['closed'] == 1 )
+				{
+					mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '1' WHERE `id` = '".$rows['id']."'" );
+					if ( $rows['type'] == 'issues' )
+					{
+						$data[$id][$ird]['closed'] = $rows['closed'];
+						$data[$id][$ird]['dont_add'] = 1;
+					}
+				}
+				// check whether it's being closed, or it's already open
+				
+				if ( $id == 'issues' && ( $found && ( $rows['comments'] < $rd['comments'] ) ) )
+				{
+					mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `comments` = '".$rd['comments']."' WHERE `id` = '".$rows['id']."'" );
+					// update our new comment limit
+					
+					$ccall = 'http://github.com/api/v2/json/issues/comments/'.$git_chans['repo'].'/'.$rows['info_id'];
+					$cdata = self::call_api( $ccall );
+					$cdata['comments'] = array_slice( $cdata['comments'], $rows['comments'] );
+					$cdata['repo'] = $git_chans['repo'];
+					$cdata['repo_id'] = $rows['info_id'];
+					$cdata['issue_title'] = $rd['title'];
+					
+					$comments++;
+					// we need to find out which comments are new.
+				}
+				// means we have new comments!
 			}
-			// loop through the recursive api calls and call them
+			// look for comment changes & other crap, see large comment above.
+			
+			if ( $git_chans['empty'] == 0 && ( $comments > 0 ) )
+			{
+				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $cdata ) )."', '0', 'comments')" );
+			}
+			// we have changed records!
+			
+			if ( count( $data[$id] ) == 0 )
+				continue;
+			// no changes <3
+			
+			foreach ( $data[$id] as $i => $rep )
+			{
+				if ( $git_chans['empty'] == 0 && isset( $rep['pull_request_url'] ) )
+				{
+					$ncall = 'http://github.com/api/v2/json/pulls/'.$git_chans['repo'].'/'.$rep['number'];
+					$ndata = self::call_api( $ncall );
+					unset( $data[$id][$i] );
+					$data[$id][$i] = $ndata['pull'];
+				}
+				// check if the issue has a pull_request_url, this will stop the following from happening
+				// n0valyfe has opened issue #2048
+				// n0valyfe has requested to merge ..
+				// ^ these happen at the same time when someone opens a pull request
+				
+				$state = ( $rep['state'] == 'open' ) ? 0 : 1;
+				$data[$id][$i]['repo'] = $git_chans['repo'];
+				$data[$id][$i]['type'] = isset( $rep['pull_request_url'] ) ? 'pull' : 'issue';
+				$rid = ( isset( $rep['pull_request_url'] ) ) ? 'pulls' : 'issues';
+				$timestamp = strtotime( $rep['created_at'] );
+				$number = $rep['number'];
+				$changed++;
+				
+				if ( !isset( $rep['dont_add'] ) )
+					mysql_query( "INSERT INTO `".self::$config['mysql']['table_i']."` (`type`, `repo`, `info_id`, `timestamp`, `comments`, `closed`) VALUES('".$rid."', '".$git_chans['repo']."', '".$number."', '".$timestamp."', '".$rep['comments']."', '".$state."')" );
+				else
+					mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '0' WHERE `type` = '".$rid."' AND `info_id` = '".$rep['number']."'" );
+				// check if the issue is new or not, if it is insert it into our issue table so
+				// we don't recognise it again, and also pass info into our post_recieve table
+			}
+			
+			if ( $git_chans['empty'] == 0 && ( $changed > 0 ) )
+			{
+				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $data ) )."', '0', '".$id."')" );
+			}
+			// we have changed records!
 			
 			if ( $git_chans['empty'] == 1 )
 				mysql_query( "UPDATE `".self::$config['mysql']['table_c']."` SET `empty` = '0' WHERE `id` = '".$git_chans['id']."'" );
@@ -735,6 +698,9 @@ class bot
 	{
 		$repo = $payload['repository']['owner']['name'] . '/' . $payload['repository']['name'];
 		$commits = count( $payload['commits'] );
+		if ( count( $commits ) == 0 )
+			continue;
+		// let's go!
 		
 		foreach ( $payload['commits'] as $id => $commit )
 		{
@@ -780,49 +746,74 @@ class bot
 	static public function parse_issues( $xbot, $payload )
 	{
 		$issues = count( $payload['issues'] );
+		if ( $issues == 0 )
+			continue;
+		// let's go!
+	
 		foreach ( $payload['issues'] as $id => $issue )
 		{
 			$repo = $issue['repo'];
 			$repo_a = explode( '/', $repo );
-			
 			$issue['body'] = preg_replace( '/\s\s+/', ' ', $issue['body'] );
-			$msg = self::$config['unparsed_responses']['issues'];
-			$search = array(
-				'{repo}', '{user}', '{colour}', '{plural}', '{id}', '{date}', '{title}', '{message}', '{url}', '{pull_request}'
-			);
 			
-			if ( !isset( $issue['closed'] ) )
+			if ( $issue['type'] == 'issue' )
 			{
-				$plural = 'opened';
-				$colour = '3';
-				$time = date( 'd/m/Y H:i', strtotime( $issue['created_at'] ) );
+				$msg = self::$config['unparsed_responses']['issues'];
+				$search = array(
+					'{repo}', '{user}', '{colour}', '{plural}', '{id}', '{date}', '{title}', '{message}', '{url}'
+				);
+				
+				if ( !isset( $issue['closed'] ) )
+				{
+					$plural = 'opened';
+					$colour = '3';
+					$time = date( 'd/m/Y H:i', strtotime( $issue['created_at'] ) );
+				}
+				else if ( $issue['closed'] == 1 && $issue['state'] == 'open' )
+				{
+					$plural = 'reopened';
+					$colour = '3';
+					$time = date( 'd/m/Y H:i', strtotime( $issue['updated_at'] ) );
+				}
+				else
+				{
+					$plural = 'closed';
+					$colour = '4';
+					$time = date( 'd/m/Y H:i', strtotime( $issue['updated_at'] ) );
+				}
+				// find out whether it's being opened, closed OR reopened..
+				
+				$replace = array(
+					$repo_a[1],
+					$issue['user'],
+					$colour,
+					$plural,
+					$issue['number'],
+					$time,
+					( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
+					( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
+					$issue['html_url']
+				);
 			}
-			else if ( $issue['closed'] == 1 && $issue['state'] == 'open' )
-			{
-				$plural = 'reopened';
-				$colour = '3';
-				$time = date( 'd/m/Y H:i', strtotime( $issue['updated_at'] ) );
-			}
+			// it's an issue, parse it this way
 			else
 			{
-				$plural = 'closed';
-				$colour = '4';
-				$time = date( 'd/m/Y H:i', strtotime( $issue['updated_at'] ) );
+				$msg = self::$config['unparsed_responses']['pulls'];
+				$search = array(
+					'{repo}', '{user}', '{head_label}', '{base_label}', '{title}', '{message}', '{url}'
+				);
+				
+				$replace = array(
+					$repo_a[1],
+					$issue['user']['login'],
+					$issue['head']['label'],
+					$issue['base']['label'],
+					( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
+					( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
+					$issue['html_url']
+				);
 			}
-			// find out whether it's being opened, closed OR reopened..
-			
-			$replace = array(
-				$repo_a[1],
-				$issue['user'],
-				$colour,
-				$plural,
-				$issue['number'],
-				$time,
-				( strlen( $issue['title'] ) > 50 ) ? substr( $issue['title'], 0, 50 ).'..' : $issue['title'],
-				( strlen( $issue['body'] ) > 150 ) ? substr( $issue['body'], 0, 150 ).'..' : $issue['body'],
-				$issue['html_url'],
-				( isset( $issue['pull_request_url'] ) ) ? ' (pull request: '.$issue['pull_request_url'].')' : '',
-			);
+			// it's a pull request, parse it differently :3
 			
 			$msg = str_replace( $search, $replace, $msg );
 			// compile a message
@@ -842,53 +833,6 @@ class bot
 	}
 	
 	/*
-	* parse_pulls
-	*
-	* @params
-	* $xbot < object, $payload < valid github json
-	*/
-	static public function parse_pulls( $xbot, $payload )
-	{
-		$pulls = count( $payload['pulls'] );
-		foreach ( $payload['pulls'] as $id => $pull )
-		{
-			$repo = $pull['repo'];
-			$repo_a = explode( '/', $repo );
-			
-			$pull['body'] = preg_replace( '/\s\s+/', ' ', $pull['body'] );
-			$msg = self::$config['unparsed_responses']['pulls'];
-			$search = array(
-				'{repo}', '{user}', '{head_label}', '{base_label}', '{title}', '{message}', '{url}'
-			);
-			
-			$replace = array(
-				$repo_a[1],
-				$pull['user']['login'],
-				$pull['head']['label'],
-				$pull['base']['label'],
-				( strlen( $pull['title'] ) > 50 ) ? substr( $pull['title'], 0, 50 ).'..' : $pull['title'],
-				( strlen( $pull['body'] ) > 150 ) ? substr( $pull['body'], 0, 150 ).'..' : $pull['body'],
-				$pull['html_url']
-			);
-
-			$msg = str_replace( $search, $replace, $msg );
-			// compile a message
-			
-			$net = self::$config['repos'][$repo];
-			// commit channel
-			
-			$xbot->msg( $net[0], $net[1], $msg );
-			
-			if ( $pulls > 4 )
-				usleep( 500000 );
-		}
-		// foreach pulls.
-		
-		// output info like so:
-		// acorairc: n0valyfe has requested to merge n0valyfe:bugfix into ircnode:acorairc: Issue title - Issue body this is a lump of text etc (https://github.com/technoweenie/faraday/pull/15)
-	}
-	
-	/*
 	* parse_comments
 	*
 	* @params
@@ -897,6 +841,10 @@ class bot
 	static public function parse_comments( $xbot, $payload )
 	{
 		$comments = count( $payload['comments'] );
+		if ( count( $comments ) == 0 )
+			continue;
+		// let's go!
+		
 		foreach ( $payload['comments'] as $id => $comment )
 		{
 			$repo = $payload['repo'];
