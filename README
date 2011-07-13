@@ -8,7 +8,7 @@ Questions to Ricki @ irc.ircnode.org/#lobby
 TODO:
 
 Add support for re-opening issues (DONE)
-Add support for closing? issues
+Add support for closing? issues (DONE)
 Add a :tracking command? Maybe.
 Add debug logging to a file
 Change :track and :untrack to pm only (DONE)
