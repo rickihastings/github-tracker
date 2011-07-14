@@ -13,3 +13,4 @@ Add a :tracking command? Maybe.
 Add debug logging to a file
 Change :track and :untrack to pm only (DONE)
 Add :join and :part (DONE)
+Convert to V3 api (it's way better!)
