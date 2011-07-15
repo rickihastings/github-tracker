@@ -18,7 +18,7 @@ include( 'src/events.php' );
 include( 'src/timer.php' );
 // include xbot framework
 
-$bot = new bot;
+$bot = new bot( $argc, $argv );
 
 class bot
 {
@@ -29,7 +29,7 @@ class bot
 	static public $db;
 	static public $queries = 0;
 	static public $buffer = array();
-	static public $debug = true;
+	static public $debug = false;
 	static public $api_calls = 0;
 	// give $xbot framework a var; so we can use it all around the class.
 
@@ -39,24 +39,27 @@ class bot
 	* @params
 	* void
 	*/
-	public function __construct()
+	public function __construct( $argc, $argv )
 	{
 		$this->xbot = new xbot;
 		// new xbot
 
 		self::$config = array(
 			'options'	=> array(
-				'track_commits'		=> true, // requires commit-tracker and post recieve hooks
+				'track_commits'		=> false, // requires commit-tracker and post recieve hooks
 				'track_new_issues'	=> true,
 				'track_comments'	=> true,
 				'track_closes'		=> true,
 				'track_reopens'		=> true,
 				'track_merges'		=> true,
+				'new_data_interval'	=> 60 // in seconds, beware setting this below about 10 will probably exceed your daily limit of 5000
+										  // and it certainly will if you have multiple repos being tracked, see github to get an unlimited
+										  // amount of calls.
 			),
 			// here we can specify what to track
 		
 			'networks' 		=> array(
-				'localhost'	=> array(
+				'irc.ircnode.org'	=> array(
 					'port' 			=> '6667',
 
 					'nick' 			=> 'Github',
@@ -70,7 +73,7 @@ class bot
 			'unparsed_responses'	=> array(
 				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
 				'issues'	=> '{repo}: 6{user} {colour}{plural} issue #{id} at ({date}): {title} - {message} ({url})',
-				'pulls'		=> '{repo}: 6{user} wanted to merge (5{head_label}) into (7{base_label}) : {title} - {message} ({url})',
+				'pulls'		=> '{repo}: 6{user} wants someone to merge (5{head_label}) into (7{base_label}): {title} - {message} ({url})',
 				'comments'	=> '{repo}: 6{user} has commented on ({title}) (#{id}): {message} ({url})',
 				'merges'	=> '{repo}: 6{user} has 3merged {commit} {plural} into (5{head_label}) into (7{base_label}) at ({date}): {title} - {message} ({url})',
 				// unrequested responses, ie event based
@@ -84,8 +87,8 @@ class bot
 			'error_messages'		=> array(
 				'help_messages'		=> array(
 					'The following commands can be used in channel or via pm.',
-					'  :commits user/repo id',
-					'  :issues user/repo #id',
+					'  :commit user/repo id',
+					'  :issue user/repo #id',
 				),
 				'admin_help_msgs'	=> array(
 					'The following commands are admin only and can only be used via pm.',
@@ -109,10 +112,10 @@ class bot
 				'track_new_repo_1'	=> 'Now tracking {repo} in {chan}. Collecting repo information...',
 				'track_new_repo_2'	=> '... Done, repo now being tracked.',
 				// :track error messages
-				'commits_syntax'		=> 'Syntax is :commits user/repo id',
+				'commits_syntax'	=> 'Syntax is :commit user/repo id',
 				'commits_noid'		=> 'Invalid commit id, make sure it is a full commit id in sha hash form.',
 				// :commit error messages
-				'issues_syntax'		=> 'Syntax is :issues user/repo #id',
+				'issues_syntax'		=> 'Syntax is :issue user/repo #id',
 				'issues_noid'		=> 'Invalid issue id, make sure it is a valid id, prefixed with a hash (#).',
 				// :issue error messages
 				'invalid_repo'		=> 'Invalid repo, are you sure I\'m tracking it?',
@@ -145,6 +148,10 @@ class bot
 			// admin hosts (don't add a *@, it doesn't support wildcards (might in future))
 		);
 		
+		if ( $argc > 1 && $argv[1] == 'debug' )
+			self::$debug = true;
+		// argc
+		
 		self::debug( 'connecting to mysql ('.self::$config['mysql']['host'].':'.self::$config['mysql']['db'].')' );
 		self::$db = mysql_connect( self::$config['mysql']['host'], self::$config['mysql']['user'], self::$config['mysql']['pass'] );
 		mysql_select_db( self::$config['mysql']['db'], self::$db );
@@ -157,7 +164,7 @@ class bot
 		// connect the bot
 		
 		$this->xbot->timer->add( array( 'bot', 'listen_data', array( $this->xbot ) ), 5, 0 );
-		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), 30, 0 );
+		$this->xbot->timer->add( array( 'bot', 'get_new_data', array( $this->xbot ) ), self::$config['options']['new_data_interval'], 0 );
 		// set up some timers, we only actually go hunting for new data every 30 seconds, then if new data is found its stored
 		// the stored data is checked by listen_data every 5 seconds. We only check every 30 seconds because for huge repos like
 		// rails/rails, which I developed this on it can be quite intensive, and plus the more often we check the quicker
@@ -395,7 +402,7 @@ class bot
 			}
 			// help message
 			
-			if ( strcasecmp( $messages[0], 'commits' ) == 0 )
+			if ( strcasecmp( $messages[0], 'commit' ) == 0 )
 			{
 				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 )
 				{
@@ -419,14 +426,15 @@ class bot
 				$call = 'https://api.github.com/repos/'.$repo.'/commits/'.$id;
 				$payload = self::call_api( $call );
 				
-				if ( $payload['message'] == 'Not Found' )
+				if ( strtolower( $payload['message'] ) == 'not found' )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['commits_noid'] );
 					return false;
 				}
 				// invalid commit id - GAME OVER.
 				
-				$payload['commit']['message'] = preg_replace( '/\s\s+/', ' ', $payload['commit']['message'] );
+				$payload = $payload['commit'];
+				$payload['message'] = preg_replace( '/\s\s+/', ' ', $payload['message'] );
 				$msg = self::$config['unparsed_responses']['commit'];
 				
 				$search = array(
@@ -435,9 +443,9 @@ class bot
 				
 				$replace = array(
 					$repo_a[1],
-					$payload['committer']['login'],
-					date( 'd/m/Y H:i', strtotime( $payload['commit']['committer']['date'] ) ),
-					( strlen( $payload['commit']['message'] ) > 150 ) ? substr( $payload['commit']['message'], 0, 150 ).'..' : $payload['commit']['message'],
+					$payload['committer']['name'],
+					date( 'd/m/Y H:i', strtotime( $payload['committer']['date'] ) ),
+					( strlen( $payload['message'] ) > 150 ) ? substr( $payload['message'], 0, 150 ).'..' : $payload['message'],
 					'https://github.com/'.$repo.'/commit/'.$id
 				);
 				// compile a list of shite.
@@ -452,7 +460,7 @@ class bot
 			}
 			// someone has asked for a commit..
 			
-			if ( strcasecmp( $messages[0], 'issues' ) == 0 )
+			if ( strcasecmp( $messages[0], 'issue' ) == 0 )
 			{
 				$req = strtolower( $messages[0] );
 				if ( count( $messages ) < 3 || substr_count( $messages[1], '/' ) == 0 || $messages[2][0] != '#' )
@@ -477,7 +485,7 @@ class bot
 				$call = 'https://api.github.com/repos/'.$repo.'/issues/'.$id;
 				$payload = self::call_api( $call );
 				
-				if ( isset( $payload['error'] ) )
+				if ( strtolower( $payload['message'] ) == 'not found' )
 				{
 					$xbot->notice( $ircdata->from, $ircdata->nick, self::$config['error_messages']['issues_noid'] );
 					return false;
@@ -526,7 +534,7 @@ class bot
 				$xbot->msg( $ircdata->from, $ircdata->target, $msg );
 				// ok we've found a commit everything is good let's parse some stuff out of our json and fire it back <3
 				
-				self::debug( $ircdata->nick.' used :'.$rep.' (repo: '.$repo.'; id: '.$id.')' );
+				self::debug( $ircdata->nick.' used :issue (repo: '.$repo.'; id: '.$id.')' );
 			}
 			// someone has asked for an issue OR pull..
 		}
@@ -580,11 +588,22 @@ class bot
 		while ( $git_chans = mysql_fetch_array( $git_chans_q ) )
 		{
 			self::debug( 'scanning '.$git_chans['repo'] );
+			
+			if ( $git_chans['empty'] == 1 )
+				mysql_query( "UPDATE `".self::$config['mysql']['table_c']."` SET `empty` = '0' WHERE `id` = '".$git_chans['id']."'" );
+			// set the channel as not-empty.. make sense?
+			
 			$repo_a = explode( '/', $git_chans['repo'] );
 			
 			$call = 'http://github.com/api/v2/json/issues/list/'.$git_chans['repo'].'/open';
 			$data = self::call_api( $call );
 			$id = 'issues';
+			
+			if ( !is_array( $data[$id] ) )
+				continue;
+			// this will fix that ANNOYING AS FUCK bug where we sometimes get invalid data
+			// in $data[$id] about 10 lines below this, we're just assuming that we're always
+			// going to recieve data (even when we might be past our api usage limit).
 			
 			$changed = $comments = $events = 0;
 			// find out how many are actually new, if none are we don't bother inserting into
@@ -621,8 +640,12 @@ class bot
 					$edata = array_reverse( $edata );
 					foreach ( $edata as $edata_id => $edata_array )
 					{
-						if ( ( $edata_array['event'] == 'closed' && $rows['closed'] == 0 ) && self::$config['options']['track_closes'] )
+						if ( !$found && ( $edata_array['event'] == 'closed' && $rows['closed'] == 0 ) && self::$config['options']['track_closes'] )
 						{
+							if ( $rows['closed'] == 1 )
+								break;
+							// we shouldn't have gotten here, but we sometimes do, not sure why, this is a fix anyway.
+								
 							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '1' WHERE `id` = '".$rows['id']."'" );
 							// mark it as closed so we don't get here again
 						
@@ -640,12 +663,16 @@ class bot
 							
 							$events++;
 							// just so we know something has changed
-							break;
 						}
 						// this will explain why we can't find it.
 						
-						if ( ( $edata_array['event'] == 'reopened' && $rows['closed'] == 1 ) && self::$config['options']['track_reopens'] )
+						elseif ( ( $found && $rows['closed'] == 1 ) && 
+								 ( $edata_array['event'] == 'reopened' && $rows['closed'] == 1 ) && self::$config['options']['track_reopens'] )
 						{
+							if ( $rows['closed'] == 0 )
+								break;
+							// again. shouldn't be here
+						
 							mysql_query( "UPDATE `".self::$config['mysql']['table_i']."` SET `closed` = '0' WHERE `id` = '".$rows['id']."'" );
 							// mark it as closed so we don't get here again
 							
@@ -662,11 +689,10 @@ class bot
 							
 							unset( $data[$id][$ird] );
 							// remove it from $data, to prevent it blurting REOPENED issue, OPENED issue
-							break;
 						}
 						// this will explain we can find a record thats been previously marked as closed, it's open again!
 						
-						if ( ( $edata_array['event'] == 'merged' && $rows['closed'] == 0 ) && self::$config['options']['track_merges'] )
+						elseif ( ( $edata_array['event'] == 'merged' && $rows['closed'] == 0 ) && self::$config['options']['track_merges'] )
 						{
 							$icall = 'https://api.github.com/repos/'.$git_chans['repo'].'/pulls/'.$rows['info_id'];
 							$idata = self::call_api( $icall );
@@ -704,8 +730,9 @@ class bot
 					// update our new comment limit
 					
 					$ccall = 'https://api.github.com/repos/'.$git_chans['repo'].'/issues/'.$rows['info_id'].'/comments';
-					$cdata = self::call_api( $ccall );
-					$cdata['comments'] = array_slice( $cdata, $rows['comments'] );
+					$cedata = self::call_api( $ccall );
+					
+					$cdata['comments'] = array_slice( $cedata, $rows['comments'] );
 					$cdata['repo'] = $git_chans['repo'];
 					$cdata['repo_id'] = $rows['info_id'];
 					$cdata['issue_title'] = $rd['title'];
@@ -730,6 +757,8 @@ class bot
 			}
 			// we have more changed records.
 			
+			self::debug( 'finished' );
+			
 			if ( count( $data[$id] ) == 0 )
 				continue;
 			// no changes <3
@@ -738,7 +767,7 @@ class bot
 			{
 				if ( $git_chans['empty'] == 0 && isset( $rep['pull_request_url'] ) )
 				{
-					$ncall = 'http://github.com/api/v2/json/pulls/'.$git_chans['repo'].'/'.$rep['number'];
+					$ncall = 'https://github.com/api/v2/json/pulls/'.$git_chans['repo'].'/'.$rep['number'];
 					$ndata = self::call_api( $ncall );
 					unset( $data[$id][$i] );
 					$data[$id][$i] = $ndata['pull'];
@@ -766,10 +795,6 @@ class bot
 				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $data ) )."', '0', '".$id."')" );
 			}
 			// we have changed records!
-			
-			if ( $git_chans['empty'] == 1 )
-				mysql_query( "UPDATE `".self::$config['mysql']['table_c']."` SET `empty` = '0' WHERE `id` = '".$git_chans['id']."'" );
-			// set the channel as not-empty.. make sense?
 		}
 		// loop through repos
 	}
@@ -790,9 +815,6 @@ class bot
 		
 		foreach ( $payload['commits'] as $id => $commit )
 		{
-			$call = 'https://api.github.com/repos/'.$repo.'/commits/'.$commit['id'];
-			$payloads = self::call_api( $call );
-			
 			$commit['message'] = preg_replace( '/\s\s+/', ' ', $commit['message'] );
 			$msg = self::$config['unparsed_responses']['commits'];
 			$search = array(
@@ -801,8 +823,8 @@ class bot
 			
 			$replace = array(
 				$payload['repository']['name'],
-				$payloads['committer']['login'],
-				$payload['repository']['integrate_branch'],
+				$payload['author']['name'],
+				( !isset( $payload['repository']['integrate_branch'] ) ) ? 'master' : $payload['repository']['integrate_branch'],
 				substr( $commit['id'], 0, 7 ),
 				( count( $commit['modified'] ) > 3 ) ? count( $commit['modified'] ) . ' files' : implode( ' ', $commit['modified'] ),
 				( strlen( $commit['message'] ) > 150 ) ? substr( $commit['message'], 0, 150 ).'..' : $commit['message'],

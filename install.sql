@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS `git_chans` (
   `chan` varchar(255) NOT NULL,
   `empty` int(11) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=11 ;
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 ;
 
 -- --------------------------------------------------------
 
@@ -46,8 +46,9 @@ CREATE TABLE IF NOT EXISTS `git_info` (
   `timestamp` int(20) NOT NULL,
   `repo` varchar(255) NOT NULL,
   `comments` int(3) NOT NULL,
+  `closed` int(1) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=137 ;
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 ;
 
 -- --------------------------------------------------------
 
@@ -62,4 +63,4 @@ CREATE TABLE IF NOT EXISTS `git_post_recieves` (
   `read` int(1) NOT NULL,
   `type` varchar(255) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=4 ;
+) ENGINE=InnoDB  DEFAULT CHARSET=latin1 ;
