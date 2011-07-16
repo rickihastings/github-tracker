@@ -52,7 +52,10 @@ class bot
 		self::$config = json_decode( $conf, true );
 		
 		if ( self::$config == null )
+		{
 			self::debug( 'failed config parse, you may have comments in it, remove them :)' );
+			die;
+		}
 		// config can't be parsed.
 		
 		self::debug( 'connecting to mysql ('.self::$config['mysql']['host'].':'.self::$config['mysql']['db'].')' );
@@ -465,7 +468,7 @@ class bot
 				$payload = json_decode( $data['payload'], true );
 				
 				if ( $data['type'] == 'commit' && self::$config['options']['track_commits'] )
-					self::parse_commits( $xbot, $repo, $payload );
+					self::parse_commits( $xbot, $payload );
 				if ( $data['type'] == 'events' )
 					self::parse_events( $xbot, $payload );
 				if ( $data['type'] == 'issues' )
@@ -678,7 +681,7 @@ class bot
 				// n0valyfe has requested to merge ..
 				// ^ these happen at the same time when someone opens a pull request
 				
-				if ( $git_chans['empty'] == 0 && strtotime( $rep['created_at'] ) != strtotime( $rep['updated_at'] ) )
+				if ( ( $git_chans['empty'] == 0 && strtotime( $rep['created_at'] ) != strtotime( $rep['updated_at'] ) ) && self::$config['options']['track_reopens']  )
 				{
 					$ecall = 'https://api.github.com/repos/'.$git_chans['repo'].'/issues/'.$rd['number'].'/events';
 					$edata = self::call_api( $ecall );
@@ -727,18 +730,21 @@ class bot
 			if ( $git_chans['empty'] == 0 && ( $comments > 0 ) )
 			{
 				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $cdata ) )."', '0', 'comments')" );
+				self::debug( 'found '.$comments.' new comment(s) for '.$git_chans['repo'].', added to output queue' );
 			}
 			// we have changed records!
 			
 			if ( $git_chans['empty'] == 0 && ( $events > 0 ) )
 			{
 				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $new_edata ) )."', '0', 'events')" );
+				self::debug( 'found '.$events.' new event(s) for '.$git_chans['repo'].', added to output queue' );
 			}
 			// we have more changed records.
 			
 			if ( ( $git_chans['empty'] == 0 && ( $changed > 0 ) ) && self::$config['options']['track_new_issues'] )
 			{
 				mysql_query( "INSERT INTO `".self::$config['mysql']['table_p']."` (`timestamp`, `payload`, `read`, `type`) VALUES('".time()."', '".addslashes( json_encode( $data ) )."', '0', '".$id."')" );
+				self::debug( 'found '.$changed.' new issue(s) for '.$git_chans['repo'].', added to output queue' );
 			}
 			// we have changed records!
 		}
@@ -749,15 +755,17 @@ class bot
 	* parse_commits
 	*
 	* @params
-	* $xbot < object, $repo < valid repo ie ircnode/acorairc, $payload < valid github json
+	* $xbot < object, $payload < valid github json
 	*/
-	static public function parse_commits( $xbot, $repo, $payload )
+	static public function parse_commits( $xbot, $payload )
 	{
 		$repo = $payload['repository']['owner']['name'] . '/' . $payload['repository']['name'];
 		$commits = count( $payload['commits'] );
 		if ( count( $commits ) == 0 )
 			return;
 		// let's go!
+		
+		self::debug( 'recieved '.$commits.' commit(s) for '.$repo.', added to output queue' );
 		
 		foreach ( $payload['commits'] as $id => $commit )
 		{
@@ -1040,8 +1048,14 @@ class bot
 	*/
 	static public function debug( $msg )
 	{
+		$real_msg = '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\r\n";
+		
+		$handle = @fopen( self::$config['options']['logfile'], 'a' );
+		@fwrite( $handle, $real_msg );
+		@fclose( $handle );
+	
 		if ( self::$debug )
-			print '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\r\n";
+			print $real_msg;
 	}
 }
 
