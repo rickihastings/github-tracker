@@ -43,114 +43,17 @@ class bot
 	{
 		$this->xbot = new xbot;
 		// new xbot
-
-		self::$config = array(
-			'options'	=> array(
-				'track_commits'		=> false, // requires commit-tracker and post recieve hooks
-				'track_new_issues'	=> true,
-				'track_comments'	=> true,
-				'track_closes'		=> true,
-				'track_reopens'		=> true,
-				'track_merges'		=> true,
-				'new_data_interval'	=> 60 // in seconds, beware setting this below about 10 will probably exceed your daily limit of 5000
-										  // and it certainly will if you have multiple repos being tracked, see github to get an unlimited
-										  // amount of calls.
-			),
-			// here we can specify what to track
-		
-			'networks' 		=> array(
-				'irc.ircnode.org'	=> array(
-					'port' 			=> '6667',
-
-					'nick' 			=> 'Github',
-					'ident' 		=> 'github',
-					'real' 			=> 'Github Tracker',
-					'chans'			=> array(), // DO NOT USE.
-				),
-				// network two
-			),
-			
-			'unparsed_responses'	=> array(
-				'commits'	=> '{repo}: 6{user} 2{branch} * r{revision} / ({files}): {title} ({url})',
-				'issues'	=> '{repo}: 6{user} {colour}{plural} issue #{id} at ({date}): {title} - {message} ({url})',
-				'pulls'		=> '{repo}: 6{user} wants someone to merge (5{head_label}) into (7{base_label}): {title} - {message} ({url})',
-				'comments'	=> '{repo}: 6{user} has commented on ({title}) (#{id}): {message} ({url})',
-				'merges'	=> '{repo}: 6{user} has 3merged {commit} {plural} into (5{head_label}) into (7{base_label}) at ({date}): {title} - {message} ({url})',
-				// unrequested responses, ie event based
-				'commit'	=> '{repo}: commit added by 6{user} on ({date}): {title} ({url})',
-				'issue'		=> '{repo}: #{id} opened by 6{user} on ({date}) ({comments} {plural}) ({colour}{state}): {title} - {message} ({url})',
-				'pull'		=> '{repo}: pull request by 6{user} on ({date}) to merge 5{head_label} into 7{base_label} ({comments} {plural}) ({colour}{state}): {title} - {message} ({url})',
-				// requested responses, ie commands
-			),
-			// unparsed messages
-			
-			'error_messages'		=> array(
-				'help_messages'		=> array(
-					'The following commands can be used in channel or via pm.',
-					'  :commit user/repo id',
-					'  :issue user/repo #id',
-				),
-				'admin_help_msgs'	=> array(
-					'The following commands are admin only and can only be used via pm.',
-					'  :track user/repo network/#channel',
-					'  :untrack user/repo',
-					'  :join network/#channel',
-					'  :part network/#channel',
-				),
-				// help messages
-				'join_syntax'		=> 'Syntax is :join network/#channel',
-				'part_syntax'		=> 'Syntax is :part network/#channel',
-				'join_already_in'	=> 'I\'m already in that channel!',
-				'part_not_in'		=> 'I\'m not in that channel!',
-				'part_already_track'=> 'I\'m currently tracking in this channel, if you wish to stop, see :untrack',
-				// :join/part error messages
-				'untrack_syntax'	=> 'Syntax is :untrack user/repo',
-				'untrack_repo'		=> 'Sucessfully stopped tracking {repo}',
-				// :untrack error messages
-				'track_syntax'		=> 'Syntax is :track user/repo network/#channel',
-				'track_nonet'		=> 'I\'m currently not connected to that network, you can connect me to it using my config array.',
-				'track_new_repo_1'	=> 'Now tracking {repo} in {chan}. Collecting repo information...',
-				'track_new_repo_2'	=> '... Done, repo now being tracked.',
-				// :track error messages
-				'commits_syntax'	=> 'Syntax is :commit user/repo id',
-				'commits_noid'		=> 'Invalid commit id, make sure it is a full commit id in sha hash form.',
-				// :commit error messages
-				'issues_syntax'		=> 'Syntax is :issue user/repo #id',
-				'issues_noid'		=> 'Invalid issue id, make sure it is a valid id, prefixed with a hash (#).',
-				// :issue error messages
-				'invalid_repo'		=> 'Invalid repo, are you sure I\'m tracking it?',
-				'already_got_repo'	=> 'I\'m already tracking that repo.',
-				'access_denied'		=> 'Sorry, you don\'t have access to use that command.',
-				// misc errors
-			),
-			// error messages
-
-			'ctcp'		=> array(
-				'version'	=> 'Use me! And abuse me :3 https://github.com/n0valyfe/github-tracker',
-			),
-			// ctcp replies
-			
-			'mysql' 			=> array(
-				'host' 		=> 'localhost',
-				'user'		=> 'root',
-				'pass'		=> '',
-				'db'		=> 'samantha',
-				'table_c'	=> 'git_chans',
-				'table_i' 	=> 'git_info',
-				'table_p' 	=> 'git_post_recieves',
-			),
-			// mysql
-			
-			'admin_hosts'		=> array(
-				'10.0.2.2',
-				'wl562-633.members.linode.com',
-			),
-			// admin hosts (don't add a *@, it doesn't support wildcards (might in future))
-		);
 		
 		if ( $argc > 1 && $argv[1] == 'debug' )
 			self::$debug = true;
 		// argc
+				
+		$conf = file_get_contents( 'github.conf' );
+		self::$config = json_decode( $conf, true );
+		
+		if ( self::$config == null )
+			self::debug( 'failed config parse, you may have comments in it, remove them :)' );
+		// config can't be parsed.
 		
 		self::debug( 'connecting to mysql ('.self::$config['mysql']['host'].':'.self::$config['mysql']['db'].')' );
 		self::$db = mysql_connect( self::$config['mysql']['host'], self::$config['mysql']['user'], self::$config['mysql']['pass'] );
@@ -170,7 +73,7 @@ class bot
 		// rails/rails, which I developed this on it can be quite intensive, and plus the more often we check the quicker
 		// we can run out of api calls (unless you get on the whitelist)
 		$this->xbot->main( 'bot', 'main' );
-		// boot the main loop w/ a callback
+		// boot the main loop w/ a callback*/
 	}
 
 	/*

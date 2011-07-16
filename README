@@ -3,6 +3,8 @@ To install:
 Dump install.sql into a database, upload commit-tracker.php to a webserver and add it as a post-recieve hook in your repo (isn't required, if it isnt added the bot won't track commits)
 Configure github.php and run, enjoy.
 
+Configure it in github.conf, repos are tracked via commands (dynamically in sql). Config file is parsed as json so comments arn't supported, sorry
+
 Questions to Ricki @ irc.ircnode.org/#lobby
 
 TODO:
@@ -13,4 +15,4 @@ Add a :tracking command? Maybe.
 Add debug logging to a file
 Change :track and :untrack to pm only (DONE)
 Add :join and :part (DONE)
-Convert to V3 api (it's way better!)
+Convert to V3 api (it's way better!) (DONE - converted everything but the main tracking command to v3, as v3 has pagination for that, which.. sucks)
