@@ -11,6 +11,7 @@
 
 set_time_limit( 0 );
 error_reporting( E_ALL ^ E_NOTICE );
+date_default_timezone_set( 'GMT' );
 // set time limit to 0
 
 include( 'src/xbot.php' );
@@ -114,7 +115,7 @@ class bot
 			$message = substr( $ircdata->message, 1 );
 			$messages = explode( ' ', $message );
 			// parse up message
-		
+
 			if ( strcasecmp( $messages[0], 'track' ) == 0 || strcasecmp( $messages[0], 'untrack' ) == 0 )
 			{
 				$req = strtolower( $messages[0] );

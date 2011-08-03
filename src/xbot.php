@@ -212,6 +212,9 @@ class xbot
 				else
 					call_user_func_array( array( $class, $function ), array( $this, $ircdata_obj ) );
 				// execute the callback
+
+				unset( $ircdata_obj );
+				unset( $this->ircdata );
 			}
 			// foreach through our sockets
 
@@ -604,7 +607,7 @@ class xbot
 		// usleep a tick, so we can wait for the reply
 
 		$socket = $this->sockets[$host];
-		while ( $raw = stream_get_line( $socket, 4093, "\r\n" ) )
+		while ( $raw = stream_get_line( $socket, 4093, "\n" ) )
 		{
 			$raw = trim( $host.' '.$raw );
 			$ircdata = explode( ' ', $raw );
@@ -691,7 +694,7 @@ class xbot
 	{
 		$socket = $this->sockets[$host];
 
-		fputs( $socket, $message."\r\n", strlen( $message."\r\n" ) );
+		fputs( $socket, $message."\n", strlen( $message."\n" ) );
 		// fputs.
 	}
 
