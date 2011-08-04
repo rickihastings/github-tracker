@@ -580,7 +580,7 @@ class bot
 							
 							$events++;
 							// just so we know something has changed
-							break;
+							continue;
 						}
 						// this will explain why we can't find it.
 						
@@ -618,6 +618,16 @@ class bot
 							$idata = self::call_api( $icall );
 							// if we've gotten to here it means we can't find the issue, so let's find it.
 						
+							end( $new_edata['events'] );
+							$key = key( $new_edata['events'] );
+							
+							if ( $new_edata['events'][$key]['event'] == 'closed' )
+							{
+								$events--;
+								unset( $new_edata['events'][$key] );
+							}
+							// check if the previous event is a close, if it is remove it!
+							
 							$nedata = $edata[$edata_id];
 							$nedata['head_label'] = $idata['head']['label'];
 							$nedata['base_label'] = $idata['base']['label'];
@@ -628,7 +638,7 @@ class bot
 							$nedata['body'] = $idata['body'];
 							$nedata['updated_at'] = $idata['merged_at'];
 							$nedata['html_url'] = $idata['html_url'];
-							$new_edata['events'][] = $medata;
+							$new_edata['events'][] = $nedata;
 							
 							$events++;
 							// just so we know something has changed
@@ -829,7 +839,7 @@ class bot
 					'{repo}', '{user}', '{colour}', '{plural}', '{id}', '{date}', '{title}', '{message}', '{url}'
 				);
 				
-				$colour = ( $event['event'] == 'reopened' ) ? '3' : '4';
+				$colour = ( $event['event'] == 'reopened' || $event['event'] == 'merged' ) ? '3' : '4';
 				
 				$replace = array(
 					$repo_a[1],
