@@ -1059,11 +1059,11 @@ class bot
 	*/
 	static public function debug( $msg )
 	{
-		$real_msg = '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\r\n";
+		$real_msg = '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\n";
 		
-		$handle = @fopen( self::$config['options']['logfile'], 'a' );
-		@fwrite( $handle, $real_msg );
-		@fclose( $handle );
+		$handle = fopen( dirname( __FILE__ ).self::$config['options']['logfile'], 'a' );
+		fwrite( $handle, $real_msg );
+		fclose( $handle );
 	
 		if ( self::$debug )
 			print $real_msg;
