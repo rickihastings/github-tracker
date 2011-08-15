@@ -1061,7 +1061,7 @@ class bot
 	{
 		$real_msg = '[' . date( 'd:m:Y H:i:s', time() ) . '] ' . $msg . "\n";
 		
-		$handle = fopen( dirname( __FILE__ ).self::$config['options']['logfile'], 'a' );
+		$handle = fopen( dirname( __FILE__ ).'/'.self::$config['options']['logfile'], 'a' );
 		fwrite( $handle, $real_msg );
 		fclose( $handle );
 	
